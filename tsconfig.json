@@ -1,3 +1,4 @@
+// tsconfig.json
 {
   "compilerOptions": {
     "target": "es5",
@@ -18,12 +19,10 @@
         "name": "next"
       }
     ],
-    // --- 이 부분을 추가하거나 수정하세요 ---
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"]
     }
-    // ------------------------------------
   },
   "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
   "exclude": ["node_modules"]

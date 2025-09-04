@@ -1,191 +1,213 @@
-'use client';
+// /src/app/page.tsx
+"use client";
 
-import { useState, Fragment, ChangeEvent, ClipboardEvent } from 'react';
+import { useState, ClipboardEvent, ChangeEvent, useRef } from 'react';
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Loader2, AlertCircle, CheckCircle, Download, Upload } from "lucide-react";
 
 // --- 타입 정의 ---
-type RowStatus = 'idle' | 'loading' | 'success' | 'error';
+type VideoRow = { title: string; url: string; notes: string; };
+type AnalysisStatus = 'welcome' | 'input' | 'loading' | 'completed';
+type FulfilledResult = { status: 'fulfilled'; value: { id: string; title: string; url: string; notes: string; status: 'completed'; analysis: { [category: string]: { [feature: string]: string } }; }; };
+type RejectedResult = { status: 'rejected'; reason: { id: string; title: string; url: string; status: 'failed'; error: string; }; };
+type AnalysisResult = FulfilledResult | RejectedResult;
 
-interface TableRow {
-  id: number;
-  title: string;
-  videoUrl: string;
-  notes: string;
-  status: RowStatus;
-  result?: any; // 분석 결과 저장
-  error?: string; // 에러 메시지 저장
-}
+const INITIAL_ROWS = 30;
 
-// 30개의 빈 행을 생성하는 함수
-const createInitialRows = (count = 30): TableRow[] =>
-  Array.from({ length: count }, (_, i) => ({
-    id: i,
-    title: '',
-    videoUrl: '',
-    notes: '',
-    status: 'idle',
-  }));
+export default function Home() {
+  const [videos, setVideos] = useState<VideoRow[]>(() => Array(INITIAL_ROWS).fill({ title: '', url: '', notes: '' }));
+  const [analysisStatus, setAnalysisStatus] = useState<AnalysisStatus>('welcome');
+  const [results, setResults] = useState<AnalysisResult[]>([]);
+  const [selectedVideo, setSelectedVideo] = useState<AnalysisResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const pasteStartCell = useRef<{ rowIndex: number; colIndex: number } | null>(null);
 
-export default function HomePage() {
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [rows, setRows] = useState<TableRow[]>(createInitialRows());
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const completedVideos = results.filter((r): r is FulfilledResult => r.status === 'fulfilled');
+  const failedVideos = results.filter((r): r is RejectedResult => r.status === 'rejected');
 
-  // --- 모달 열기/닫기 ---
-  const openModal = () => {
-    setRows(createInitialRows()); // 모달 열 때마다 테이블 초기화
-    setIsAnalyzing(false);
-    setIsModalOpen(true);
-  };
-  const closeModal = () => setIsModalOpen(false);
-
-  // --- 테이블 값 변경 핸들러 ---
-  const handleInputChange = (index: number, field: keyof TableRow, value: string) => {
-    setRows(prevRows =>
-      prevRows.map((row, i) =>
-        i === index ? { ...row, [field]: value } : row
-      )
-    );
+  const handleInputChange = (index: number, field: keyof VideoRow, value: string) => {
+    const newVideos = [...videos];
+    newVideos[index] = { ...newVideos[index], [field]: value };
+    setVideos(newVideos);
   };
 
-  // --- ✨ 엑셀 등에서 동시 붙여넣기 처리 핸들러 ✨ ---
-  const handlePaste = (e: ClipboardEvent<HTMLInputElement>, startRow: number, startCol: number) => {
+  const handlePaste = (e: ClipboardEvent<HTMLTableCellElement>) => {
+    if (!pasteStartCell.current) return;
     e.preventDefault();
-    const pasteData = e.clipboardData.getData('text');
-    const pastedRows = pasteData.split('\n').map(row => row.split('\t'));
 
-    setRows(prevRows => {
-      const newRows = [...prevRows];
-      pastedRows.forEach((row, rowIndex) => {
-        const currentRowIndex = startRow + rowIndex;
-        if (currentRowIndex < newRows.length) {
-          row.forEach((cell, colIndex) => {
-            const currentColIndex = startCol + colIndex;
-            if (currentColIndex === 0) newRows[currentRowIndex].title = cell;
-            else if (currentColIndex === 1) newRows[currentRowIndex].videoUrl = cell;
-            else if (currentColIndex === 2) newRows[currentRowIndex].notes = cell;
-          });
-        }
+    const { rowIndex: startRow, colIndex: startCol } = pasteStartCell.current;
+    const pasteData = e.clipboardData.getData('text');
+    const rows = pasteData.split('\n').filter(row => row.trim() !== '');
+    
+    const newVideos = [...videos];
+
+    rows.forEach((row, r_idx) => {
+      const currentRowIndex = startRow + r_idx;
+      if (currentRowIndex >= newVideos.length) return;
+
+      const cells = row.split('\t');
+      cells.forEach((cell, c_idx) => {
+        const currentColIndex = startCol + c_idx;
+        if (currentColIndex === 0) newVideos[currentRowIndex].title = cell;
+        else if (currentColIndex === 1) newVideos[currentRowIndex].url = cell;
+        else if (currentColIndex === 2) newVideos[currentRowIndex].notes = cell;
       });
-      return newRows;
     });
+    setVideos(newVideos);
   };
 
-  // --- ✨ 다중 영상 순차 분석 처리 핸들러 ✨ ---
-  const handleBatchAnalysis = async () => {
-    const targets = rows.filter(row => typeof row.videoUrl === 'string' && row.videoUrl.trim() !== '');
-    if (targets.length === 0) {
-      alert('분석할 영상 링크를 하나 이상 입력해주세요.');
+  const handleAnalyze = async () => {
+    setAnalysisStatus('loading');
+    setError(null);
+    setResults([]);
+    setSelectedVideo(null);
+
+    const videosToAnalyze = videos.filter(v => v.url.trim() !== '');
+    if (videosToAnalyze.length === 0) {
+      setError("분석할 영상의 URL을 하나 이상 입력해주세요.");
+      setAnalysisStatus('input');
       return;
     }
 
-    setIsAnalyzing(true);
+    try {
+      const response = await fetch('/api/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ videos: videosToAnalyze }),
+      });
 
-    for (const row of targets) {
-      // 현재 분석 중인 행의 상태를 'loading'으로 변경
-      setRows(prev => prev.map(r => r.id === row.id ? { ...r, status: 'loading' } : r));
-
-      try {
-        const response = await fetch('/api/analyze', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ videoUrl: row.videoUrl }),
-        });
-
-        const data = await response.json();
-
-        if (!response.ok) {
-          throw new Error(data.error || '분석 실패');
-        }
-
-        // 성공 시 상태 업데이트
-        setRows(prev => prev.map(r => r.id === row.id ? { ...r, status: 'success', result: data.data } : r));
-
-      } catch (err: any) {
-        // 실패 시 상태 업데이트
-        setRows(prev => prev.map(r => r.id === row.id ? { ...r, status: 'error', error: err.message } : r));
-      }
-    }
-    setIsAnalyzing(false);
-  };
-  
-  // --- 상태에 따른 아이콘 렌더링 ---
-  const renderStatusIcon = (status: RowStatus) => {
-    switch (status) {
-      case 'loading':
-        return <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-500 mx-auto"></div>;
-      case 'success':
-        return <span className="text-green-500">✔</span>;
-      case 'error':
-        return <span className="text-red-500">✖</span>;
-      default:
-        return null;
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `서버 에러: ${response.status}`);
+      setResults(data.results);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setAnalysisStatus('completed');
     }
   };
+
+  // ... (renderAnalysisDetail 함수는 이전과 동일하므로 생략 가능, 혹은 그대로 유지)
+  const renderAnalysisDetail = () => {
+    if (!selectedVideo) return <div className="text-center text-gray-500 mt-10">목록에서 영상을 선택하여 상세 분석 결과를 확인하세요.</div>;
+    if (selectedVideo.status === 'rejected') {
+      return (
+        <Card className="w-full"><CardHeader><CardTitle className="text-red-600">분석 실패</CardTitle></CardHeader>
+          <CardContent><p><strong>영상 제목:</strong> {selectedVideo.reason.title}</p><p><strong>실패 원인:</strong> {selectedVideo.reason.error}</p></CardContent>
+        </Card>
+      );
+    }
+
+    const analysisData = selectedVideo.value.analysis;
+    const categories = Object.keys(analysisData);
+
+    return (
+      <Card className="w-full">
+        <CardHeader>
+          <CardTitle>{selectedVideo.value.title}</CardTitle>
+          <div className="flex space-x-2 mt-2">
+            <Button variant="outline" size="sm" disabled><Download className="mr-2 h-4 w-4" />결과 다운로드</Button>
+            <Button variant="outline" size="sm" disabled><Upload className="mr-2 h-4 w-4" />드라이브 업로드</Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <Tabs defaultValue={categories[0]}>
+            <TabsList className="grid w-full grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+              {categories.map(category => (<TabsTrigger key={category} value={category}>{category}</TabsTrigger>))}
+            </TabsList>
+            {categories.map(category => (
+              <TabsContent key={category} value={category}>
+                <Table><TableHeader><TableRow><TableHead className="w-[30%]">피처</TableHead><TableHead>분석 결과</TableHead></TableRow></TableHeader>
+                  <TableBody>
+                    {Object.entries(analysisData[category]).map(([feature, value]) => (
+                      <TableRow key={feature}>
+                        <TableCell className="font-medium">{feature}</TableCell>
+                        <TableCell className={value === '누락됨' || value === '분석 불가' ? 'text-red-500' : ''}>{value}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TabsContent>
+            ))}
+          </Tabs>
+        </CardContent>
+      </Card>
+    );
+  };
+
 
   return (
-    <Fragment>
-      {/* --- 기존 메인 페이지 (완벽 유지) --- */}
-      <main className="flex min-h-screen flex-col items-center justify-center p-24">
-        <div className="text-center mb-12">
-          <h1 className="text-5xl font-extrabold">AI 광고 영상 분석</h1>
-        </div>
-        <div className="flex space-x-4">
-          <button className="bg-gray-300 text-gray-500 font-bold py-4 px-8 rounded-lg cursor-not-allowed">
-            수집 자동화 (개발중)
-          </button>
-          <button onClick={openModal} className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 px-8 rounded-lg">
-            링크 수동 추가
-          </button>
-        </div>
-      </main>
-
-      {/* --- ✨ 테이블 입력 방식의 모달 창 ✨ --- */}
-      {isModalOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex justify-center items-center p-4">
-          <div className="bg-white rounded-lg shadow-2xl w-full max-w-6xl h-[90vh] flex flex-col">
-            <div className="p-4 border-b">
-              <h2 className="text-2xl font-bold">링크 수동 추가 (최대 30개)</h2>
-              <p className="text-sm text-gray-600">엑셀, 구글 시트 등에서 여러 행을 복사하여 붙여넣기 할 수 있습니다.</p>
-            </div>
-            <div className="flex-grow overflow-auto">
-              <table className="w-full text-sm text-left">
-                <thead className="text-xs text-gray-700 uppercase bg-gray-100 sticky top-0">
-                  <tr>
-                    <th className="px-2 py-3 w-16 text-center">상태</th>
-                    <th className="px-4 py-3">영상 제목</th>
-                    <th className="px-4 py-3">영상 링크</th>
-                    <th className="px-4 py-3">비고</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((row, rowIndex) => (
-                    <tr key={row.id} className="bg-white border-b hover:bg-gray-50">
-                      <td className="px-2 py-2 text-center">{renderStatusIcon(row.status)}</td>
-                      <td className="px-1 py-1">
-                        <input type="text" value={row.title} onChange={(e) => handleInputChange(rowIndex, 'title', e.target.value)} onPaste={(e) => handlePaste(e, rowIndex, 0)} className="w-full p-2 border rounded"/>
-                      </td>
-                      <td className="px-1 py-1">
-                        <input type="text" value={row.videoUrl} onChange={(e) => handleInputChange(rowIndex, 'videoUrl', e.target.value)} onPaste={(e) => handlePaste(e, rowIndex, 1)} className="w-full p-2 border rounded"/>
-                      </td>
-                      <td className="px-1 py-1">
-                        <input type="text" value={row.notes} onChange={(e) => handleInputChange(rowIndex, 'notes', e.target.value)} onPaste={(e) => handlePaste(e, rowIndex, 2)} className="w-full p-2 border rounded"/>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div className="p-4 border-t flex justify-between items-center">
-              <button onClick={closeModal} className="bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold py-2 px-4 rounded">
-                닫기
-              </button>
-              <button onClick={handleBatchAnalysis} disabled={isAnalyzing} className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded disabled:bg-gray-400">
-                {isAnalyzing ? '분석 진행 중...' : `분석 시작 (${rows.filter(r => r.videoUrl).length}개)`}
-              </button>
-            </div>
+    <main className="container mx-auto p-4 md:p-8">
+      <div className="flex justify-between items-center mb-6">
+        <h1 className="text-3xl font-bold cursor-pointer" onClick={() => setAnalysisStatus('welcome')}>AI 광고 영상 분석</h1>
+        {analysisStatus === 'welcome' && (
+          <div className="space-x-2">
+            <Button disabled>수집 자동화 (개발중)</Button>
+            <Button variant="secondary" onClick={() => setAnalysisStatus('input')}>링크 수동 추가</Button>
           </div>
+        )}
+      </div>
+
+      {analysisStatus === 'input' && (
+        <>
+          <Card>
+            <CardHeader>
+              <CardTitle>분석할 영상 링크 입력</CardTitle>
+              <p className="text-sm text-gray-500">엑셀/시트에서 데이터를 복사한 후, 아래 표의 시작할 셀을 클릭하고 붙여넣기 (Ctrl+V) 하세요.</p>
+            </CardHeader>
+            <CardContent>
+              <div className="max-h-96 overflow-auto">
+                <Table>
+                  <TableHeader><TableRow><TableHead className="w-[30%]">제목</TableHead><TableHead className="w-[50%]">영상 링크 (URL)</TableHead><TableHead className="w-[20%]">비고</TableHead></TableRow></TableHeader>
+                  <TableBody onPaste={handlePaste}>
+                    {videos.map((video, rowIndex) => (
+                      <TableRow key={rowIndex}>
+                        <TableCell onFocus={() => pasteStartCell.current = { rowIndex, colIndex: 0 }}>
+                          <Input value={video.title} onChange={(e) => handleInputChange(rowIndex, 'title', e.target.value)} placeholder="영상 제목" />
+                        </TableCell>
+                        <TableCell onFocus={() => pasteStartCell.current = { rowIndex, colIndex: 1 }}>
+                          <Input value={video.url} onChange={(e) => handleInputChange(rowIndex, 'url', e.target.value)} placeholder="https://youtube.com/watch?v=..." />
+                        </TableCell>
+                        <TableCell onFocus={( ) => pasteStartCell.current = { rowIndex, colIndex: 2 }}>
+                          <Input value={video.notes} onChange={(e) => handleInputChange(rowIndex, 'notes', e.target.value)} placeholder="메모" />
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </CardContent>
+          </Card>
+          <div className="text-center my-6"><Button onClick={handleAnalyze} size="lg">분석 시작</Button></div>
+        </>
+      )}
+
+      {analysisStatus === 'loading' && (
+        <div className="text-center my-20"><Loader2 className="mx-auto h-12 w-12 animate-spin" /><p className="mt-4 text-lg">영상 데이터를 분석 중입니다. 잠시만 기다려주세요...</p></div>
+      )}
+
+      {error && (
+        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative mb-6" role="alert">
+          <strong className="font-bold">오류 발생: </strong><span className="block sm:inline">{error}</span>
         </div>
       )}
-    </Fragment>
+
+      {analysisStatus === 'completed' && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          <div className="lg:col-span-1 flex flex-col gap-4">
+            <Card><CardHeader><CardTitle className="flex items-center"><CheckCircle className="mr-2 text-green-500" /> 분석 완료 ({completedVideos.length})</CardTitle></CardHeader>
+              <CardContent className="max-h-96 overflow-y-auto"><ul className="space-y-2">{completedVideos.map(item => (<li key={item.value.id} onClick={() => setSelectedVideo(item)} className={`p-2 rounded-md cursor-pointer hover:bg-gray-100 ${selectedVideo?.status === 'fulfilled' && selectedVideo.value.id === item.value.id ? 'bg-blue-100' : ''}`}>{item.value.title}</li>))}</ul></CardContent>
+            </Card>
+            <Card><CardHeader><CardTitle className="flex items-center"><AlertCircle className="mr-2 text-red-500" /> 분석 미완 ({failedVideos.length})</CardTitle></CardHeader>
+              <CardContent className="max-h-96 overflow-y-auto"><ul className="space-y-2">{failedVideos.map(item => (<li key={item.reason.id} onClick={() => setSelectedVideo(item)} className={`p-2 rounded-md cursor-pointer hover:bg-gray-100 ${selectedVideo?.status === 'rejected' && selectedVideo.reason.id === item.reason.id ? 'bg-red-100' : ''}`}><p className="font-medium">{item.reason.title}</p><p className="text-xs text-red-600">{item.reason.error}</p></li>))}</ul></CardContent>
+            </Card>
+          </div>
+          <div className="lg:col-span-2">{renderAnalysisDetail()}</div>
+        </div>
+      )}
+    </main>
   );
 }
