@@ -29,35 +29,44 @@ export default function Home() {
   const completedVideos = results.filter((r): r is FulfilledResult => r.status === 'fulfilled');
   const failedVideos = results.filter((r): r is RejectedResult => r.status === 'rejected');
 
+  // [수정됨] 단일 입력 처리 로직
   const handleInputChange = (index: number, field: keyof VideoRow, value: string) => {
-    const newVideos = [...videos];
-    newVideos[index] = { ...newVideos[index], [field]: value };
-    setVideos(newVideos);
+    setVideos(currentVideos => 
+      currentVideos.map((video, i) => 
+        i === index ? { ...video, [field]: value } : video
+      )
+    );
   };
 
-  const handlePaste = (e: ClipboardEvent<HTMLTableCellElement>) => {
+  // [수정됨] 붙여넣기 처리 로직
+  const handlePaste = (e: ClipboardEvent<HTMLTableSectionElement>) => {
     if (!pasteStartCell.current) return;
     e.preventDefault();
 
     const { rowIndex: startRow, colIndex: startCol } = pasteStartCell.current;
     const pasteData = e.clipboardData.getData('text');
-    const rows = pasteData.split('\n').filter(row => row.trim() !== '');
+    const pastedRows = pasteData.split('\n').filter(row => row.trim() !== '');
     
-    const newVideos = [...videos];
+    setVideos(currentVideos => {
+      const newVideos = [...currentVideos];
+      pastedRows.forEach((row, r_idx) => {
+        const currentRowIndex = startRow + r_idx;
+        if (currentRowIndex >= newVideos.length) return;
 
-    rows.forEach((row, r_idx) => {
-      const currentRowIndex = startRow + r_idx;
-      if (currentRowIndex >= newVideos.length) return;
+        const pastedCells = row.split('\t');
+        pastedCells.forEach((cell, c_idx) => {
+          const currentColIndex = startCol + c_idx;
+          const currentVideo = { ...newVideos[currentRowIndex] };
 
-      const cells = row.split('\t');
-      cells.forEach((cell, c_idx) => {
-        const currentColIndex = startCol + c_idx;
-        if (currentColIndex === 0) newVideos[currentRowIndex].title = cell;
-        else if (currentColIndex === 1) newVideos[currentRowIndex].url = cell;
-        else if (currentColIndex === 2) newVideos[currentRowIndex].notes = cell;
+          if (currentColIndex === 0) currentVideo.title = cell;
+          else if (currentColIndex === 1) currentVideo.url = cell;
+          else if (currentColIndex === 2) currentVideo.notes = cell;
+          
+          newVideos[currentRowIndex] = currentVideo;
+        });
       });
+      return newVideos;
     });
-    setVideos(newVideos);
   };
 
   const handleAnalyze = async () => {
@@ -90,7 +99,6 @@ export default function Home() {
     }
   };
 
-  // ... (renderAnalysisDetail 함수는 이전과 동일하므로 생략 가능, 혹은 그대로 유지)
   const renderAnalysisDetail = () => {
     if (!selectedVideo) return <div className="text-center text-gray-500 mt-10">목록에서 영상을 선택하여 상세 분석 결과를 확인하세요.</div>;
     if (selectedVideo.status === 'rejected') {
@@ -137,7 +145,6 @@ export default function Home() {
       </Card>
     );
   };
-
 
   return (
     <main className="container mx-auto p-4 md:p-8">

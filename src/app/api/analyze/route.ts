@@ -23,18 +23,6 @@ interface CategorizedFeatures {
   [category: string]: { [feature: string]: string };
 }
 
-// --- 환경 변수 및 API 클라이언트 초기화 ---
-const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY;
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-
-let youtube: Youtube;
-let genAI: GoogleGenerativeAI;
-
-if (YOUTUBE_API_KEY && GEMINI_API_KEY) {
-  youtube = new Youtube(YOUTUBE_API_KEY);
-  genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-}
-
 // --- 헬퍼 함수: CSV 파싱 ---
 function getFeaturesFromCSV(): Feature[] {
   const filePath = path.join(process.cwd(), 'src', 'data', 'output_features.csv');
@@ -60,7 +48,7 @@ function getYouTubeVideoId(url: string): string | null {
 }
 
 // --- 메인 분석 함수 ---
-async function analyzeSingleVideo(video: VideoInput, features: Feature[], model: any): Promise<any> {
+async function analyzeSingleVideo(video: VideoInput, features: Feature[], youtube: Youtube, model: any): Promise<any> {
   const videoId = getYouTubeVideoId(video.url);
   if (!videoId) {
     throw new Error(`'${video.url}'은(는) 잘못된 YouTube URL입니다.`);
@@ -133,7 +121,6 @@ async function analyzeSingleVideo(video: VideoInput, features: Feature[], model:
     const jsonString = jsonMatch[0];
     const parsedResult: CategorizedFeatures = JSON.parse(jsonString);
     
-    // 일부 피처 누락 검증 및 처리
     let missingCount = 0;
     features.forEach(feature => {
       if (!parsedResult[feature.Category] || typeof parsedResult[feature.Category][feature.Feature] === 'undefined') {
@@ -143,7 +130,7 @@ async function analyzeSingleVideo(video: VideoInput, features: Feature[], model:
       }
     });
 
-    if (missingCount > 50) { // 임계값 설정 (너무 많은 피처가 누락되면 분석 실패로 간주)
+    if (missingCount > 50) {
         throw new Error(`분석 실패: ${missingCount}개의 피처가 누락되었습니다. Gemini 응답을 확인하세요.`);
     }
     
@@ -160,12 +147,19 @@ async function analyzeSingleVideo(video: VideoInput, features: Feature[], model:
 
 // --- API 라우트 핸들러 ---
 export async function POST(req: NextRequest) {
+  // [수정됨] API 클라이언트를 모든 요청 시 새로 생성
+  const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY;
+  const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+
   if (!YOUTUBE_API_KEY || !GEMINI_API_KEY) {
     return NextResponse.json({ message: '서버에 API 키가 설정되지 않았습니다.' }, { status: 500 });
   }
+  
+  const youtube = new Youtube(YOUTUBE_API_KEY);
+  const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+  const model = genAI.getGenerativeModel({ model: "gemini-pro" });
     
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-pro" });
     const body = await req.json();
     const videos: VideoInput[] = body.videos.filter((v: VideoInput) => v.url && v.url.trim() !== '');
 
@@ -176,7 +170,7 @@ export async function POST(req: NextRequest) {
     const features = getFeaturesFromCSV();
 
     const analysisResults = await Promise.allSettled(
-      videos.map(video => analyzeSingleVideo(video, features, model))
+      videos.map(video => analyzeSingleVideo(video, features, youtube, model))
     );
 
     const finalResults = analysisResults.map((result, index) => {
