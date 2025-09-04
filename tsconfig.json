@@ -1,6 +1,7 @@
 {
   "compilerOptions": {
-    "lib": ["dom", "dom.iterable", "es6"],
+    "target": "es5",
+    "lib": ["dom", "dom.iterable", "esnext"],
     "allowJs": true,
     "skipLibCheck": true,
     "strict": true,
@@ -17,10 +18,12 @@
         "name": "next"
       }
     ],
+    // --- 이 부분을 추가하거나 수정하세요 ---
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"]
     }
+    // ------------------------------------
   },
   "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
   "exclude": ["node_modules"]

@@ -40,9 +40,11 @@ export default function HomePage() {
 
   // --- 테이블 값 변경 핸들러 ---
   const handleInputChange = (index: number, field: keyof TableRow, value: string) => {
-    const newRows = [...rows];
-    (newRows[index] as any)[field] = value;
-    setRows(newRows);
+    setRows(prevRows =>
+      prevRows.map((row, i) =>
+        i === index ? { ...row, [field]: value } : row
+      )
+    );
   };
 
   // --- ✨ 엑셀 등에서 동시 붙여넣기 처리 핸들러 ✨ ---
@@ -51,24 +53,26 @@ export default function HomePage() {
     const pasteData = e.clipboardData.getData('text');
     const pastedRows = pasteData.split('\n').map(row => row.split('\t'));
 
-    const newRows = [...rows];
-    pastedRows.forEach((row, rowIndex) => {
-      const currentRowIndex = startRow + rowIndex;
-      if (currentRowIndex < newRows.length) {
-        row.forEach((cell, colIndex) => {
-          const currentColIndex = startCol + colIndex;
-          if (currentColIndex === 0) newRows[currentRowIndex].title = cell;
-          if (currentColIndex === 1) newRows[currentRowIndex].videoUrl = cell;
-          if (currentColIndex === 2) newRows[currentRowIndex].notes = cell;
-        });
-      }
+    setRows(prevRows => {
+      const newRows = [...prevRows];
+      pastedRows.forEach((row, rowIndex) => {
+        const currentRowIndex = startRow + rowIndex;
+        if (currentRowIndex < newRows.length) {
+          row.forEach((cell, colIndex) => {
+            const currentColIndex = startCol + colIndex;
+            if (currentColIndex === 0) newRows[currentRowIndex].title = cell;
+            else if (currentColIndex === 1) newRows[currentRowIndex].videoUrl = cell;
+            else if (currentColIndex === 2) newRows[currentRowIndex].notes = cell;
+          });
+        }
+      });
+      return newRows;
     });
-    setRows(newRows);
   };
 
   // --- ✨ 다중 영상 순차 분석 처리 핸들러 ✨ ---
   const handleBatchAnalysis = async () => {
-    const targets = rows.filter(row => row.videoUrl.trim() !== '');
+    const targets = rows.filter(row => typeof row.videoUrl === 'string' && row.videoUrl.trim() !== '');
     if (targets.length === 0) {
       alert('분석할 영상 링크를 하나 이상 입력해주세요.');
       return;
