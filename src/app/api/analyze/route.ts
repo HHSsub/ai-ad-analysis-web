@@ -85,16 +85,42 @@ async function analyzeSingleVideo(video: VideoInput, features: Feature[], youtub
 
   const featureText = features.map(f => `- ${f.Category} | ${f.Feature}: ${f.Description}`).join('\n');
   const prompt = `
-    You are an expert advertising video analyst. Based on the provided YouTube video information and script, analyze and provide values for each item in the feature list.
+    You are a world-class advertising data analyst and Video Diagnostician. Your sole mission is to dissect the input advertising video (YouTube URL) frame by frame, and synthesize audio, text, structure, and performance data to convert it into highly detailed and objective data according to the given 156 analysis items.
+
+    [Core Performance Principles]
+    Objectivity: Subjective impressions or evaluations are absolutely forbidden. All answers must be based on quantifiable or clearly observed facts. Instead of expressions like "beautiful" or "sad", describe specifically such as "warm tone colors used" or "slow tempo piano background music used".
+
+    Accuracy: All items must be analyzed without omission. If information is insufficient or judgment is impossible, specify "판단 불가" for that value.
+
+    Structure Compliance: The output must be in the specified JSON format. Do not add any conversation or explanation outside the JSON structure.
+
+    Based on the provided YouTube video information and script, analyze and provide values for each item in the feature list with extreme precision and objectivity.
+
     **Video Information:**
     - Title: ${snippet.title}
     - Description: ${snippet.description}
     - Script: """${script}"""
-    **Analysis Feature List:**
+    - Views: ${statistics.viewCount || 'N/A'}
+    - Likes: ${statistics.likeCount || 'N/A'}
+    - Duration: ${contentDetails.duration || 'N/A'}
+
+    **Analysis Feature List (156 items):**
     ${featureText}
+
+    **Critical Instructions:**
+    1. Analyze every single feature systematically
+    2. Use only observable, measurable data
+    3. When script analysis is required, extract specific elements like dialogue tone, pace, keywords, emotional indicators
+    4. For visual elements, infer from title/description context when possible
+    5. Provide concrete values, not vague assessments
+
     **Output Format:**
-    You MUST provide the analysis result ONLY in the following JSON format. Each feature's value must be a string. If analysis is impossible for an item, enter "분석 불가" as the value. Do NOT add any other explanations or markdown formatting.
-    { "Category 1": { "Feature 1.1": "Analyzed value" } }
+    응답 형식 (JSON만):
+    {
+      "feature_1": "분석 결과 또는 기본값",
+      "feature_2": "분석 결과 또는 기본값"
+    }
+    You MUST provide the analysis result ONLY in the following JSON format. Each feature's value must be a string. If analysis is impossible for an item, enter "판단 불가" as the value. Do NOT add any other explanations or markdown formatting.
   `;
 
   const result = await model.generateContent(prompt);
@@ -129,7 +155,7 @@ export async function POST(req: NextRequest) {
     });
     const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
     const model = genAI.getGenerativeModel({ 
-      model: "gemini-pro",
+      model: "gemini-1.5-flash",
       safetySettings: [
         { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
         { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
