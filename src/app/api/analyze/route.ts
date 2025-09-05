@@ -15,9 +15,10 @@ interface VideoInput {
 }
 
 interface Feature {
+  No: string;
   Category: string;
   Feature: string;
-  Description: string;
+  Value: string;
 }
 
 // --- 헬퍼 함수: CSV 파싱 (BOM 제거) ---
@@ -30,8 +31,8 @@ function getFeaturesFromCSV(): Feature[] {
     }
     const lines = fileContent.split('\n').slice(1);
     return lines.map(line => {
-      const [Category, Feature, Description] = line.split(',').map(s => (s || '').trim().replace(/"/g, ''));
-      return { Category, Feature, Description };
+      const [No, Category, Feature, Value] = line.split(',').map(s => (s || '').trim().replace(/"/g, ''));
+      return { No, Category, Feature, Value };
     }).filter(f => f.Category && f.Feature);
   } catch (error) {
     console.error("CSV 파일 읽기 오류:", error);
@@ -45,6 +46,124 @@ function getYouTubeVideoId(url: string): string | null {
   const regex = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/;
   const match = url.match(regex);
   return match ? match[1] : null;
+}
+
+// --- "판단 불가" 항목 확인 함수 ---
+function hasUndeterminedValues(analysis: any): string[] {
+  const undeterminedKeys: string[] = [];
+  Object.keys(analysis).forEach(key => {
+    if (analysis[key] === "판단 불가" || analysis[key] === "판단불가") {
+      undeterminedKeys.push(key);
+    }
+  });
+  return undeterminedKeys;
+}
+
+// --- 재분석 함수 ---
+async function retryAnalysisForUndetermined(
+  video: VideoInput, 
+  features: Feature[], 
+  youtube: any, 
+  model: any, 
+  existingAnalysis: any,
+  undeterminedKeys: string[]
+): Promise<any> {
+  const videoId = getYouTubeVideoId(video.url);
+  if (!videoId) throw new Error(`'${video.url}'은(는) 잘못된 YouTube URL입니다.`);
+
+  // YouTube API 호출
+  const response = await youtube.videos.list({
+    part: ['snippet', 'statistics', 'contentDetails'],
+    id: [videoId],
+  });
+
+  if (!response.data.items || response.data.items.length === 0) {
+    throw new Error(`YouTube API에서 영상 정보를 찾을 수 없습니다 (ID: ${videoId}).`);
+  }
+  const videoDetails = response.data.items[0];
+  const snippet = videoDetails.snippet;
+  const statistics = videoDetails.statistics;
+  const contentDetails = videoDetails.contentDetails;
+
+  if (!snippet || !statistics || !contentDetails) {
+    throw new Error(`YouTube API에서 영상의 전체 정보를 가져오지 못했습니다 (ID: ${videoId}).`);
+  }
+
+  let script = '';
+  try {
+    const subtitles = await getSubtitles({ videoID: videoId, lang: 'ko' });
+    script = subtitles.map(sub => sub.text).join(' ');
+  } catch (e) {
+    try {
+      const subtitles = await getSubtitles({ videoID: videoId, lang: 'en' });
+      script = subtitles.map(sub => sub.text).join(' ');
+    } catch (e2) {
+      script = "스크립트를 추출할 수 없습니다.";
+    }
+  }
+
+  // "판단 불가" 항목만 필터링
+  const undeterminedFeatures = features.filter(f => {
+    const featureKey = `feature_${f.No}`;
+    return undeterminedKeys.includes(featureKey);
+  });
+
+  const featureText = undeterminedFeatures.map(f => `- ${f.Category} | ${f.Feature}: (이전 분석에서 "판단 불가"였던 항목)`).join('\n');
+  
+  const prompt = `
+    You are a world-class advertising data analyst and Video Diagnostician. You are performing a RETRY ANALYSIS for specific features that were previously marked as "판단 불가" (undetermined).
+
+    [RETRY ANALYSIS MISSION]
+    Focus ONLY on the features listed below that were previously undetermined. Use all available information more creatively and make educated inferences where possible. Avoid "판단 불가" unless absolutely impossible to determine.
+
+    [Core Performance Principles]
+    Objectivity: Base answers on quantifiable or clearly observed facts. Make reasonable inferences from available data.
+    Creativity: Use title, description, and script context to make educated guesses about visual and audio elements.
+    Completeness: Try to provide specific values rather than "판단 불가" whenever possible.
+
+    **Video Information:**
+    - Title: ${snippet.title}
+    - Description: ${snippet.description}
+    - Script: """${script}"""
+    - Views: ${statistics.viewCount || 'N/A'}
+    - Likes: ${statistics.likeCount || 'N/A'}
+    - Duration: ${contentDetails.duration || 'N/A'}
+
+    **Features to Re-analyze (Previously "판단 불가"):**
+    ${featureText}
+
+    **Critical Instructions for Retry:**
+    1. Use creative inference from title/description/script to estimate visual elements
+    2. Make educated guesses based on video context and genre
+    3. Provide specific, concrete values whenever possible
+    4. Only use "판단 불가" if truly impossible to infer
+    5. Consider typical patterns for this type of content
+
+    **Output Format:**
+    응답 형식 (JSON만):
+    {
+      "feature_1": "재분석 결과",
+      "feature_2": "재분석 결과"
+    }
+    You MUST provide the retry analysis result ONLY in the following JSON format. Each feature's value must be a string. Try to avoid "판단 불가" in this retry attempt.
+  `;
+
+  const result = await model.generateContent(prompt);
+  const resultResponse = await result.response;
+  const text = resultResponse.text();
+  
+  try {
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error(`Gemini 재분석 응답에서 JSON 형식을 찾을 수 없습니다. 응답: ${text}`);
+    const jsonString = jsonMatch[0];
+    const retryResult = JSON.parse(jsonString);
+    
+    // 기존 분석 결과와 재분석 결과 병합
+    const updatedAnalysis = { ...existingAnalysis, ...retryResult };
+    return updatedAnalysis;
+  } catch (e: any) {
+    throw new Error(`Gemini 재분석 결과 처리 실패: ${e.message}.`);
+  }
 }
 
 // --- 메인 분석 함수 ---
@@ -83,7 +202,7 @@ async function analyzeSingleVideo(video: VideoInput, features: Feature[], youtub
     }
   }
 
-  const featureText = features.map(f => `- ${f.Category} | ${f.Feature}: ${f.Description}`).join('\n');
+  const featureText = features.map(f => `- ${f.Category} | ${f.Feature}: ${f.Value || '분석 필요'}`).join('\n');
   const prompt = `
     You are a world-class advertising data analyst and Video Diagnostician. Your sole mission is to dissect the input advertising video (YouTube URL) frame by frame, and synthesize audio, text, structure, and performance data to convert it into highly detailed and objective data according to the given 156 analysis items.
 
@@ -113,6 +232,7 @@ async function analyzeSingleVideo(video: VideoInput, features: Feature[], youtub
     3. When script analysis is required, extract specific elements like dialogue tone, pace, keywords, emotional indicators
     4. For visual elements, infer from title/description context when possible
     5. Provide concrete values, not vague assessments
+    6. Use "판단 불가" only when truly impossible to determine
 
     **Output Format:**
     응답 형식 (JSON만):
@@ -131,8 +251,57 @@ async function analyzeSingleVideo(video: VideoInput, features: Feature[], youtub
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) throw new Error(`Gemini 응답에서 JSON 형식을 찾을 수 없습니다. 응답: ${text}`);
     const jsonString = jsonMatch[0];
-    const parsedResult = JSON.parse(jsonString);
-    return { ...video, id: videoId, status: 'completed', analysis: parsedResult };
+    let parsedResult = JSON.parse(jsonString);
+
+    // "판단 불가" 항목 확인 및 재시도 로직
+    let retryCount = 0;
+    const maxRetries = 2;
+    
+    while (retryCount < maxRetries) {
+      const undeterminedKeys = hasUndeterminedValues(parsedResult);
+      
+      if (undeterminedKeys.length === 0) {
+        // "판단 불가" 항목이 없으면 분석 완료
+        break;
+      }
+      
+      console.log(`영상 "${video.title}"에서 ${undeterminedKeys.length}개의 "판단 불가" 항목 발견. 재시도 ${retryCount + 1}/${maxRetries}`);
+      
+      try {
+        parsedResult = await retryAnalysisForUndetermined(
+          video, 
+          features, 
+          youtube, 
+          model, 
+          parsedResult, 
+          undeterminedKeys
+        );
+        retryCount++;
+      } catch (retryError) {
+        console.error(`재시도 ${retryCount + 1} 실패:`, retryError);
+        break;
+      }
+    }
+
+    // 카테고리별로 분석 결과 정리
+    const categorizedAnalysis: { [category: string]: { [feature: string]: string } } = {};
+    
+    features.forEach(feature => {
+      const featureKey = `feature_${feature.No}`;
+      const value = parsedResult[featureKey] || "분석 불가";
+      
+      if (!categorizedAnalysis[feature.Category]) {
+        categorizedAnalysis[feature.Category] = {};
+      }
+      categorizedAnalysis[feature.Category][feature.Feature] = value;
+    });
+
+    return { 
+      ...video, 
+      id: videoId, 
+      status: 'completed', 
+      analysis: categorizedAnalysis 
+    };
   } catch (e: any) {
     throw new Error(`Gemini 결과 처리 실패: ${e.message}.`);
   }
