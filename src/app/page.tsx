@@ -8,6 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Loader2, AlertCircle, CheckCircle, Download, Upload } from "lucide-react";
+import toast from 'react-hot-toast';
 
 // --- 타입 정의 ---
 type VideoRow = { title: string; url: string; notes: string; };
@@ -24,30 +25,11 @@ export default function Home() {
   const [results, setResults] = useState<AnalysisResult[]>([]);
   const [selectedVideo, setSelectedVideo] = useState<AnalysisResult | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [googleAccessToken, setGoogleAccessToken] = useState<string | null>(null);
   const pasteStartCell = useRef<{ rowIndex: number; colIndex: number } | null>(null);
 
   const completedVideos = results.filter((r): r is FulfilledResult => r.status === 'fulfilled');
   const failedVideos = results.filter((r): r is RejectedResult => r.status === 'rejected');
 
-  // URL에서 Google OAuth 결과 확인
-  useEffect(() => {
-    const urlParams = new URLSearchParams(window.location.search);
-    const accessToken = urlParams.get('access_token');
-    const authStatus = urlParams.get('auth');
-
-    if (accessToken && authStatus === 'success') {
-      setGoogleAccessToken(accessToken);
-      // URL에서 파라미터 제거
-      window.history.replaceState({}, document.title, window.location.pathname);
-      alert('Google 계정 인증이 완료되었습니다. 이제 Drive 업로드가 가능합니다.');
-    } else if (authStatus === 'error') {
-      alert('Google 인증 중 오류가 발생했습니다.');
-      window.history.replaceState({}, document.title, window.location.pathname);
-    }
-  }, []);
-
-  // [수정됨] 단일 입력 처리 로직
   const handleInputChange = (index: number, field: keyof VideoRow, value: string) => {
     setVideos(currentVideos => 
       currentVideos.map((video, i) => 
@@ -56,7 +38,6 @@ export default function Home() {
     );
   };
 
-  // [수정됨] 붙여넣기 처리 로직
   const handlePaste = (e: ClipboardEvent<HTMLTableSectionElement>) => {
     if (!pasteStartCell.current) return;
     e.preventDefault();
@@ -72,16 +53,13 @@ export default function Home() {
         if (currentRowIndex >= newVideos.length) return;
 
         const pastedCells = row.split('\t');
-        pastedCells.forEach((cell, c_idx) => {
-          const currentColIndex = startCol + c_idx;
-          const currentVideo = { ...newVideos[currentRowIndex] };
+        const currentVideo = { ...newVideos[currentRowIndex] };
 
-          if (currentColIndex === 0) currentVideo.title = cell;
-          else if (currentColIndex === 1) currentVideo.url = cell;
-          else if (currentColIndex === 2) currentVideo.notes = cell;
+        if (startCol <= 0 && pastedCells[0] !== undefined) currentVideo.title = pastedCells[0];
+        if (startCol <= 1 && pastedCells[1] !== undefined) currentVideo.url = pastedCells[1];
+        if (startCol <= 2 && pastedCells[2] !== undefined) currentVideo.notes = pastedCells[2];
           
-          newVideos[currentRowIndex] = currentVideo;
-        });
+        newVideos[currentRowIndex] = currentVideo;
       });
       return newVideos;
     });
@@ -110,15 +88,20 @@ export default function Home() {
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || `서버 에러: ${response.status}`);
       setResults(data.results);
+      toast.success('분석이 완료되었습니다!');
     } catch (err: any) {
       setError(err.message);
+      toast.error(`분석 중 오류 발생: ${err.message}`);
     } finally {
       setAnalysisStatus('completed');
     }
   };
 
   const handleDownload = async () => {
-    if (!selectedVideo || selectedVideo.status !== 'fulfilled') return;
+    if (!selectedVideo || selectedVideo.status !== 'fulfilled') {
+      toast.error('분석 완료된 영상을 선택해주세요.');
+      return;
+    }
     
     try {
       const response = await fetch('/api/download', {
@@ -134,44 +117,51 @@ export default function Home() {
       const a = document.createElement('a');
       a.style.display = 'none';
       a.href = url;
-      a.download = `${selectedVideo.value.title}_분석결과.csv`;
+      a.download = `${selectedVideo.value.title}_분석결과.xlsx`;
       document.body.appendChild(a);
       a.click();
       window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
+      toast.success('분석 결과가 다운로드되었습니다.');
     } catch (error) {
       console.error('다운로드 오류:', error);
-      alert('다운로드 중 오류가 발생했습니다.');
+      toast.error('다운로드 중 오류가 발생했습니다.');
     }
   };
 
   const handleDriveUpload = async () => {
-    if (!selectedVideo || selectedVideo.status !== 'fulfilled') return;
-    
+    if (!selectedVideo || selectedVideo.status !== 'fulfilled') {
+      toast.error('분석 완료된 영상을 선택해주세요.');
+      return;
+    }
+
+    const GOOGLE_DRIVE_FOLDER_ID = '1qwMIt4_yxM_5yIU7isNTJKp_mrBARlEm'; 
+
     try {
-      const response = await fetch('/api/drive-upload', {
+      toast.loading('Google Drive에 업로드 중...');
+      const response = await fetch('/api/upload-to-drive', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          video: selectedVideo.value,
-          accessToken: googleAccessToken 
+        body: JSON.stringify({
+          fileName: `${selectedVideo.value.title}_분석결과.xlsx`,
+          fileContent: JSON.stringify(selectedVideo.value.analysis),
+          folderId: GOOGLE_DRIVE_FOLDER_ID,
         }),
       });
 
       const data = await response.json();
       
-      if (data.authRequired) {
-        // Google 인증이 필요한 경우
-        window.location.href = data.authUrl;
-        return;
+      if (!response.ok) {
+        toast.dismiss();
+        throw new Error(data.message || '업로드 실패');
       }
-
-      if (!response.ok) throw new Error(data.message || '업로드 실패');
       
-      alert(`Google Drive에 성공적으로 업로드되었습니다!\n파일명: ${data.fileName}`);
+      toast.dismiss();
+      toast.success(`Google Drive에 성공적으로 업로드되었습니다!\n파일명: ${data.file.name}`);
     } catch (error) {
       console.error('업로드 오류:', error);
-      alert('업로드 중 오류가 발생했습니다.');
+      toast.dismiss();
+      toast.error(`업로드 중 오류가 발생했습니다: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
 
@@ -221,12 +211,10 @@ export default function Home() {
             >
               <Upload className="mr-2 h-4 w-4" />
               드라이브 업로드
-              {!googleAccessToken && <span className="ml-1 text-xs">(인증 필요)</span>}
             </Button>
           </div>
         </CardHeader>
         <CardContent>
-          {/* 탭과 테이블 사이 간격 추가 */}
           <Tabs defaultValue={categories[0]} className="w-full">
             <TabsList className="grid w-full grid-cols-3 md:grid-cols-4 lg:grid-cols-5 mb-8">
               {categories.map(category => (
@@ -240,7 +228,6 @@ export default function Home() {
               ))}
             </TabsList>
             
-            {/* 각 카테고리별 테이블 */}
             {categories.map(category => (
               <TabsContent key={category} value={category} className="mt-6">
                 <div className="rounded-lg border border-gray-200 overflow-hidden">
@@ -404,22 +391,18 @@ export default function Home() {
                     <li 
                       key={item.value.id} 
                       onClick={() => setSelectedVideo(item)} 
-                      className={`p-3 rounded-lg cursor-pointer transition-all duration-200 hover:bg-blue-50 hover:shadow-md ${
-                        selectedVideo?.status === 'fulfilled' && selectedVideo.value.id === item.value.id 
-                          ? 'bg-blue-100 border-2 border-blue-300 shadow-md' 
-                          : 'bg-white border border-gray-200'
-                      }`}
+                      className={`p-3 rounded-lg cursor-pointer ${selectedVideo?.value.id === item.value.id ? 'bg-blue-100 text-blue-800' : 'hover:bg-gray-50'}`}
                     >
-                      <p className="font-medium text-gray-800 truncate">{item.value.title}</p>
-                      <p className="text-xs text-gray-500 mt-1">156개 피처 분석 완료</p>
+                      <div className="font-medium">{item.value.title}</div>
+                      <div className="text-sm text-gray-500">156개 피처 분석 완료</div>
                     </li>
                   ))}
                 </ul>
               </CardContent>
             </Card>
-            
+
             <Card className="shadow-lg border-0">
-              <CardHeader className="bg-gradient-to-r from-red-50 to-pink-50">
+              <CardHeader className="bg-gradient-to-r from-red-50 to-rose-50">
                 <CardTitle className="flex items-center text-lg font-bold text-gray-800">
                   <AlertCircle className="mr-3 text-red-500 h-5 w-5" /> 
                   분석 미완 ({failedVideos.length})
@@ -431,24 +414,34 @@ export default function Home() {
                     <li 
                       key={item.reason.id} 
                       onClick={() => setSelectedVideo(item)} 
-                      className={`p-3 rounded-lg cursor-pointer transition-all duration-200 hover:bg-red-50 hover:shadow-md ${
-                        selectedVideo?.status === 'rejected' && selectedVideo.reason.id === item.reason.id 
-                          ? 'bg-red-100 border-2 border-red-300 shadow-md' 
-                          : 'bg-white border border-gray-200'
-                      }`}
+                      className={`p-3 rounded-lg cursor-pointer ${selectedVideo?.reason.id === item.reason.id ? 'bg-red-100 text-red-800' : 'hover:bg-gray-50'}`}
                     >
-                      <p className="font-medium text-gray-800 truncate">{item.reason.title}</p>
-                      <p className="text-xs text-red-600 mt-1 truncate">{item.reason.error}</p>
+                      <div className="font-medium text-red-700">{item.reason.title}</div>
+                      <div className="text-sm text-red-500">분석 실패: {item.reason.error}</div>
                     </li>
                   ))}
                 </ul>
               </CardContent>
             </Card>
           </div>
-          
+
           <div className="lg:col-span-2">
             {renderAnalysisDetail()}
           </div>
+        </div>
+      )}
+
+      {analysisStatus === 'welcome' && (
+        <div className="text-center my-20">
+          <h2 className="text-3xl font-semibold text-gray-800 mb-4">AI 광고 영상 분석을 시작하세요</h2>
+          <p className="text-lg text-gray-600 mb-8">YouTube 영상 링크를 입력하고 156가지 상세 피처를 분석해보세요.</p>
+          <Button 
+            onClick={() => setAnalysisStatus('input')} 
+            size="lg"
+            className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-8 py-3 text-lg transition-colors shadow-lg"
+          >
+            분석 시작하기
+          </Button>
         </div>
       )}
     </main>

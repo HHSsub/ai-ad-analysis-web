@@ -1,7 +1,6 @@
 // /src/app/api/analyze/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from '@google/generative-ai';
-// [수정됨] 공식 'googleapis' 라이브러리로 교체
 import { google } from 'googleapis';
 import { getSubtitles } from 'youtube-captions-scraper';
 import path from 'path';
@@ -71,7 +70,6 @@ async function retryAnalysisForUndetermined(
   const videoId = getYouTubeVideoId(video.url);
   if (!videoId) throw new Error(`'${video.url}'은(는) 잘못된 YouTube URL입니다.`);
 
-  // YouTube API 호출
   const response = await youtube.videos.list({
     part: ['snippet', 'statistics', 'contentDetails'],
     id: [videoId],
@@ -102,7 +100,6 @@ async function retryAnalysisForUndetermined(
     }
   }
 
-  // "판단 불가" 항목만 필터링
   const undeterminedFeatures = features.filter(f => {
     const featureKey = `feature_${f.No}`;
     return undeterminedKeys.includes(featureKey);
@@ -158,7 +155,6 @@ async function retryAnalysisForUndetermined(
     const jsonString = jsonMatch[0];
     const retryResult = JSON.parse(jsonString);
     
-    // 기존 분석 결과와 재분석 결과 병합
     const updatedAnalysis = { ...existingAnalysis, ...retryResult };
     return updatedAnalysis;
   } catch (e: any) {
@@ -171,7 +167,6 @@ async function analyzeSingleVideo(video: VideoInput, features: Feature[], youtub
   const videoId = getYouTubeVideoId(video.url);
   if (!videoId) throw new Error(`'${video.url}'은(는) 잘못된 YouTube URL입니다.`);
 
-  // [수정됨] 'googleapis'를 사용한 올바른 API 호출 방식
   const response = await youtube.videos.list({
     part: ['snippet', 'statistics', 'contentDetails'],
     id: [videoId],
@@ -202,7 +197,45 @@ async function analyzeSingleVideo(video: VideoInput, features: Feature[], youtub
     }
   }
 
-  const featureText = features.map(f => `- ${f.Category} | ${f.Feature}: ${f.Value || '분석 필요'}`).join('\n');
+  // 초기 분석 프롬프트 구성 시 YouTube 메타데이터를 미리 채워 넣음
+  const initialFeatures: { [key: string]: string } = {};
+  features.forEach(f => {
+    let value = "분석 필요"; // 기본값
+    // YouTube 메타데이터를 기반으로 초기값 설정
+    switch (f.Feature) {
+      case "전체 영상 길이":
+        value = contentDetails.duration || 'N/A';
+        break;
+      case "조회수":
+        value = statistics.viewCount || 'N/A';
+        break;
+      case "좋아요 수":
+        value = statistics.likeCount || 'N/A';
+        break;
+      case "채널명":
+        value = snippet.channelTitle || 'N/A';
+        break;
+      case "영상 제목":
+        value = snippet.title || 'N/A';
+        break;
+      case "영상 설명":
+        value = snippet.description || 'N/A';
+        break;
+      case "게시일":
+        value = snippet.publishedAt ? new Date(snippet.publishedAt).toLocaleDateString() : 'N/A';
+        break;
+      case "카테고리":
+        value = videoDetails.snippet?.categoryId || 'N/A'; 
+        break;
+    }
+    initialFeatures[`feature_${f.No}`] = value;
+  });
+
+  const featureText = features.map(f => {
+    const initialValue = initialFeatures[`feature_${f.No}`];
+    return `- ${f.Category} | ${f.Feature}: ${initialValue === "분석 필요" ? "분석 필요" : `(초기값: ${initialValue})`}`;
+  }).join('\n');
+
   const prompt = `
     You are a world-class advertising data analyst and Video Diagnostician. Your sole mission is to dissect the input advertising video (YouTube URL) frame by frame, and synthesize audio, text, structure, and performance data to convert it into highly detailed and objective data according to the given 156 analysis items.
 
@@ -233,6 +266,7 @@ async function analyzeSingleVideo(video: VideoInput, features: Feature[], youtub
     4. For visual elements, infer from title/description context when possible
     5. Provide concrete values, not vague assessments
     6. Use "판단 불가" only when truly impossible to determine
+    7. If a feature already has an initial value from YouTube metadata (e.g., "(초기값: N/A)"), you do NOT need to re-analyze it unless you can provide a more specific and accurate value. If you re-analyze, provide the new value. Otherwise, omit it from your JSON response.
 
     **Output Format:**
     응답 형식 (JSON만):
@@ -253,7 +287,8 @@ async function analyzeSingleVideo(video: VideoInput, features: Feature[], youtub
     const jsonString = jsonMatch[0];
     let parsedResult = JSON.parse(jsonString);
 
-    // "판단 불가" 항목 확인 및 재시도 로직
+    parsedResult = { ...initialFeatures, ...parsedResult };
+
     let retryCount = 0;
     const maxRetries = 2;
     
@@ -261,14 +296,13 @@ async function analyzeSingleVideo(video: VideoInput, features: Feature[], youtub
       const undeterminedKeys = hasUndeterminedValues(parsedResult);
       
       if (undeterminedKeys.length === 0) {
-        // "판단 불가" 항목이 없으면 분석 완료
         break;
       }
       
       console.log(`영상 "${video.title}"에서 ${undeterminedKeys.length}개의 "판단 불가" 항목 발견. 재시도 ${retryCount + 1}/${maxRetries}`);
       
       try {
-        parsedResult = await retryAnalysisForUndetermined(
+        const retryResult = await retryAnalysisForUndetermined(
           video, 
           features, 
           youtube, 
@@ -276,6 +310,7 @@ async function analyzeSingleVideo(video: VideoInput, features: Feature[], youtub
           parsedResult, 
           undeterminedKeys
         );
+        parsedResult = { ...parsedResult, ...retryResult };
         retryCount++;
       } catch (retryError) {
         console.error(`재시도 ${retryCount + 1} 실패:`, retryError);
@@ -283,7 +318,6 @@ async function analyzeSingleVideo(video: VideoInput, features: Feature[], youtub
       }
     }
 
-    // 카테고리별로 분석 결과 정리
     const categorizedAnalysis: { [category: string]: { [feature: string]: string } } = {};
     
     features.forEach(feature => {
@@ -317,7 +351,6 @@ export async function POST(req: NextRequest) {
   }
   
   try {
-    // [수정됨] 'googleapis'를 사용한 올바른 API 클라이언트 생성
     const youtube = google.youtube({
       version: 'v3',
       auth: YOUTUBE_API_KEY
@@ -341,7 +374,13 @@ export async function POST(req: NextRequest) {
     const features = getFeaturesFromCSV();
 
     const analysisResults = await Promise.allSettled(
-      videos.map(video => analyzeSingleVideo(video, features, youtube, model))
+      videos.map(async (video, index) => {
+        // 진행률 업데이트를 위한 콜백 함수 (클라이언트에서 사용)
+        // 이 부분은 실제 클라이언트와 서버 간의 실시간 통신이 필요합니다.
+        // 현재는 단순히 서버 로그에만 남기도록 합니다.
+        console.log(`[Progress] Analyzing video ${index + 1} of ${videos.length}: ${video.title}`);
+        return analyzeSingleVideo(video, features, youtube, model);
+      })
     );
 
     const finalResults = analysisResults.map((result, index) => {
@@ -361,7 +400,6 @@ export async function POST(req: NextRequest) {
 
   } catch (error: any) {
     console.error("API Route Error:", error);
-    // [수정됨] 더 구체적인 에러 메시지 반환
     const errorMessage = error instanceof Error ? error.message : '서버 내부 오류가 발생했습니다.';
     return NextResponse.json({ message: errorMessage }, { status: 500 });
   }
