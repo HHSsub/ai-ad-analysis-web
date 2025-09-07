@@ -21,8 +21,8 @@
     "clsx": "^2.1.1",
     "googleapis": "^128.0.0",
     "lucide-react": "^0.263.1",
-    "next": "14.0.3",
-    "papaparse": "^5.5.3",
+    "next": "^14.0.3",
+    "papaparse": "^5.3.16",
     "postcss": "^8",
     "react": "^18",
     "react-dom": "^18",
@@ -34,11 +34,11 @@
     "xlsx": "^0.18.5",
     "youtube-captions-scraper": "^2.0.3",
     "zustand": "^4.4.7",
-    "exceljs": "^4.4.0
+    "exceljs": "^4.4.0"
   },
   "devDependencies": {
     "@types/papaparse": "^5.3.16",
     "eslint": "^8",
-    "eslint-config-next": "14.0.3"
+    "eslint-config-next": "^14.0.3"
   }
 }
