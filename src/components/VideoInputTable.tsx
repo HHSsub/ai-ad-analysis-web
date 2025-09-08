@@ -38,12 +38,28 @@ const VideoInputTable: React.FC = () => {
     setInputs(Array.from({ length: 30 }, () => ({ title: '', url: '', note: '' })));
   };
 
-  // 클립보드에서 데이터 붙여넣기 처리
+  // 개선된 클립보드에서 데이터 붙여넣기 처리
   const handlePaste = (e: React.ClipboardEvent, rowIndex: number, colIndex: number) => {
-    e.preventDefault();
     const pastedData = e.clipboardData.getData('text/plain');
-    const rows = pastedData.split('\n').filter(row => row.trim());
     
+    // 빈 데이터인 경우 기본 붙여넣기 동작 허용
+    if (!pastedData || pastedData.trim() === '') {
+      return; // preventDefault() 호출하지 않음
+    }
+
+    // 단일 셀에 단순 텍스트 붙여넣기인 경우 기본 동작 허용
+    const hasNewlines = pastedData.includes('\n');
+    const hasTabs = pastedData.includes('\t');
+    
+    // 여러 행/열 데이터가 아닌 경우 기본 붙여넣기 허용
+    if (!hasNewlines && !hasTabs) {
+      return; // preventDefault() 호출하지 않음
+    }
+
+    // 여러 행/열 데이터인 경우에만 커스텀 처리
+    e.preventDefault();
+    
+    const rows = pastedData.split('\n').filter(row => row.trim());
     const newInputs = [...inputs];
     
     rows.forEach((row, i) => {
@@ -55,7 +71,15 @@ const VideoInputTable: React.FC = () => {
         }
       }
       
-      const columns = row.split('\t');
+      // 탭으로 구분된 경우와 그렇지 않은 경우 모두 처리
+      let columns: string[];
+      if (hasTabs) {
+        columns = row.split('\t');
+      } else {
+        // 탭이 없는 경우 현재 컬럼에만 붙여넣기
+        columns = [row];
+      }
+      
       const fields: (keyof VideoInput)[] = ['title', 'url', 'note'];
       
       columns.forEach((col, j) => {
@@ -68,6 +92,16 @@ const VideoInputTable: React.FC = () => {
     
     setInputs(newInputs);
     toast.success('데이터가 붙여넣어졌습니다.');
+  };
+
+  // 키보드 이벤트 처리 (Ctrl+V 감지)
+  const handleKeyDown = (e: React.KeyboardEvent, rowIndex: number, colIndex: number) => {
+    // Ctrl+V 또는 Cmd+V 감지
+    if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
+      // 붙여넣기 이벤트는 onPaste에서 처리되므로 여기서는 특별한 처리 불필요
+      // 하지만 사용자 피드백을 위해 로그 남김
+      console.log('Paste shortcut detected');
+    }
   };
 
   // YouTube URL 유효성 검사
@@ -147,6 +181,7 @@ const VideoInputTable: React.FC = () => {
       <div className="mb-4 text-sm text-gray-600">
         <p>• Excel이나 Google Sheets에서 복사한 데이터를 직접 붙여넣을 수 있습니다.</p>
         <p>• 제목과 영상링크는 필수 입력 항목입니다.</p>
+        <p>• Ctrl+V 또는 우클릭 붙여넣기를 사용할 수 있습니다.</p>
       </div>
 
       <div className="overflow-x-auto">
@@ -182,6 +217,7 @@ const VideoInputTable: React.FC = () => {
                     value={input.title}
                     onChange={(e) => handleInputChange(index, 'title', e.target.value)}
                     onPaste={(e) => handlePaste(e, index, 0)}
+                    onKeyDown={(e) => handleKeyDown(e, index, 0)}
                     className="w-full px-2 py-1 border-0 focus:ring-2 focus:ring-blue-500 focus:outline-none"
                     placeholder="영상 제목을 입력하세요"
                   />
@@ -192,6 +228,7 @@ const VideoInputTable: React.FC = () => {
                     value={input.url}
                     onChange={(e) => handleInputChange(index, 'url', e.target.value)}
                     onPaste={(e) => handlePaste(e, index, 1)}
+                    onKeyDown={(e) => handleKeyDown(e, index, 1)}
                     className={`w-full px-2 py-1 border-0 focus:ring-2 focus:outline-none ${
                       input.url && !isValidYouTubeUrl(input.url) 
                         ? 'focus:ring-red-500 bg-red-50' 
@@ -206,6 +243,7 @@ const VideoInputTable: React.FC = () => {
                     value={input.note}
                     onChange={(e) => handleInputChange(index, 'note', e.target.value)}
                     onPaste={(e) => handlePaste(e, index, 2)}
+                    onKeyDown={(e) => handleKeyDown(e, index, 2)}
                     className="w-full px-2 py-1 border-0 focus:ring-2 focus:ring-blue-500 focus:outline-none"
                     placeholder="메모 (선택사항)"
                   />
