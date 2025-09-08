@@ -51,14 +51,39 @@ function getYouTubeVideoId(url: string): string | null {
 function hasUndeterminedValues(analysis: any): string[] {
   const undeterminedKeys: string[] = [];
   Object.keys(analysis).forEach(key => {
-    if (analysis[key] === "판단 불가" || analysis[key] === "판단불가") {
+    if (analysis[key] === "판단 불가" || analysis[key] === "판단불가" || analysis[key] === "분석 필요" || !analysis[key] || analysis[key].trim() === '') {
       undeterminedKeys.push(key);
     }
   });
   return undeterminedKeys;
 }
 
-// --- 재분석 함수 ---
+// --- 기본값 생성 함수 ---
+function getDefaultValueForFeature(feature: Feature): string {
+  // 카테고리별 기본값 설정
+  switch (feature.Category?.toLowerCase()) {
+    case '인물 분석':
+      return 'N/A';
+    case '의상 분석':
+      return 'N/A';
+    case '배경 분석':
+      return 'N/A';
+    case '오디오 분석':
+      return 'N/A';
+    case '텍스트 분석':
+      return 'N/A';
+    case '영상 기술':
+      return 'N/A';
+    case '성과 지표':
+      return '0';
+    case '시간 분석':
+      return '0';
+    default:
+      return 'N/A';
+  }
+}
+
+// --- 재분석 함수 (개선된 버전) ---
 async function retryAnalysisForUndetermined(
   video: VideoInput, 
   features: Feature[], 
@@ -105,64 +130,78 @@ async function retryAnalysisForUndetermined(
     return undeterminedKeys.includes(featureKey);
   });
 
-  const featureText = undeterminedFeatures.map(f => `- ${f.Category} | ${f.Feature}: (이전 분석에서 "판단 불가"였던 항목)`).join('\n');
+  // 재분석에서는 더 간단하고 구체적인 프롬프트 사용
+  const featureText = undeterminedFeatures.map(f => `${f.No}. ${f.Category} - ${f.Feature}`).join('\n');
   
   const prompt = `
-    You are a world-class advertising data analyst and Video Diagnostician. You are performing a RETRY ANALYSIS for specific features that were previously marked as "판단 불가" (undetermined).
+다음 YouTube 영상을 분석하여 지정된 항목들에 대해 구체적인 값을 제공해주세요.
 
-    [RETRY ANALYSIS MISSION]
-    Focus ONLY on the features listed below that were previously undetermined. Use all available information more creatively and make educated inferences where possible. Avoid "판단 불가" unless absolutely impossible to determine.
+영상 정보:
+- 제목: ${snippet.title}
+- 설명: ${snippet.description?.substring(0, 500) || 'N/A'}
+- 스크립트: ${script.substring(0, 1000) || 'N/A'}
+- 조회수: ${statistics.viewCount || 'N/A'}
+- 좋아요: ${statistics.likeCount || 'N/A'}
+- 길이: ${contentDetails.duration || 'N/A'}
 
-    [Core Performance Principles]
-    Objectivity: Base answers on quantifiable or clearly observed facts. Make reasonable inferences from available data.
-    Creativity: Use title, description, and script context to make educated guesses about visual and audio elements.
-    Completeness: Try to provide specific values rather than "판단 불가" whenever possible.
+분석할 항목들:
+${featureText}
 
-    **Video Information:**
-    - Title: ${snippet.title}
-    - Description: ${snippet.description}
-    - Script: """${script}"""
-    - Views: ${statistics.viewCount || 'N/A'}
-    - Likes: ${statistics.likeCount || 'N/A'}
-    - Duration: ${contentDetails.duration || 'N/A'}
+각 항목에 대해 다음 중 하나로 응답해주세요:
+- 구체적인 값 (예: "남성", "20-30대", "검은색" 등)
+- 추정값 (예: "추정 25세", "약 5분" 등)
+- 불가능한 경우에만 "N/A"
 
-    **Features to Re-analyze (Previously "판단 불가"):**
-    ${featureText}
-
-    **Critical Instructions for Retry:**
-    1. Use creative inference from title/description/script to estimate visual elements
-    2. Make educated guesses based on video context and genre
-    3. Provide specific, concrete values whenever possible
-    4. Only use "판단 불가" if truly impossible to infer
-    5. Consider typical patterns for this type of content
-
-    **Output Format:**
-    응답 형식 (JSON만):
-    {
-      "feature_1": "재분석 결과",
-      "feature_2": "재분석 결과"
-    }
-    You MUST provide the retry analysis result ONLY in the following JSON format. Each feature's value must be a string. Try to avoid "판단 불가" in this retry attempt.
+JSON 형식으로만 응답해주세요:
+{
+  "feature_1": "값",
+  "feature_2": "값"
+}
   `;
 
-  const result = await model.generateContent(prompt);
-  const resultResponse = await result.response;
-  const text = resultResponse.text();
-  
   try {
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error(`Gemini 재분석 응답에서 JSON 형식을 찾을 수 없습니다. 응답: ${text}`);
-    const jsonString = jsonMatch[0];
-    const retryResult = JSON.parse(jsonString);
+    const result = await model.generateContent(prompt);
+    const resultResponse = await result.response;
+    const text = resultResponse.text();
     
-    const updatedAnalysis = { ...existingAnalysis, ...retryResult };
-    return updatedAnalysis;
+    console.log('Gemini 재분석 응답:', text);
+    
+    // JSON 추출 개선
+    let jsonString = text.trim();
+    
+    // 마크다운 코드 블록 제거
+    if (jsonString.startsWith('```json')) {
+      jsonString = jsonString.replace(/```json\s*/, '').replace(/\s*```$/, '');
+    } else if (jsonString.startsWith('```')) {
+      jsonString = jsonString.replace(/```\s*/, '').replace(/\s*```$/, '');
+    }
+    
+    // JSON 객체 추출
+    const jsonMatch = jsonString.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      console.warn('JSON 형식을 찾을 수 없음, 기본값 사용');
+      const defaultResult: any = {};
+      undeterminedFeatures.forEach(feature => {
+        defaultResult[`feature_${feature.No}`] = getDefaultValueForFeature(feature);
+      });
+      return defaultResult;
+    }
+    
+    const retryResult = JSON.parse(jsonMatch[0]);
+    return retryResult;
+    
   } catch (e: any) {
-    throw new Error(`Gemini 재분석 결과 처리 실패: ${e.message}.`);
+    console.error('재분석 실패:', e.message);
+    // 에러 발생 시 기본값으로 채우기
+    const defaultResult: any = {};
+    undeterminedFeatures.forEach(feature => {
+      defaultResult[`feature_${feature.No}`] = getDefaultValueForFeature(feature);
+    });
+    return defaultResult;
   }
 }
 
-// --- 메인 분석 함수 ---
+// --- 메인 분석 함수 (개선된 버전) ---
 async function analyzeSingleVideo(video: VideoInput, features: Feature[], youtube: any, model: any): Promise<any> {
   const videoId = getYouTubeVideoId(video.url);
   if (!videoId) throw new Error(`'${video.url}'은(는) 잘못된 YouTube URL입니다.`);
@@ -197,10 +236,10 @@ async function analyzeSingleVideo(video: VideoInput, features: Feature[], youtub
     }
   }
 
-  // 초기 분석 프롬프트 구성 시 YouTube 메타데이터를 미리 채워 넣음
+  // YouTube 메타데이터를 기반으로 초기값 설정
   const initialFeatures: { [key: string]: string } = {};
   features.forEach(f => {
-    let value = ""; // 기본값을 빈 문자열로 변경
+    let value = "";
     // YouTube 메타데이터를 기반으로 초기값 설정
     switch (f.Feature) {
       case "전체 영상 길이":
@@ -234,103 +273,20 @@ async function analyzeSingleVideo(video: VideoInput, features: Feature[], youtub
     }
   });
 
-  const featureText = features.map(f => {
-    const initialValue = initialFeatures[`feature_${f.No}`];
-    if (initialValue) {
-      return `- ${f.Category} | ${f.Feature}: (이미 설정됨: ${initialValue})`;
-    } else {
-      return `- ${f.Category} | ${f.Feature}: (분석 필요)`;
-    }
-  }).join('\n');
+  // 분석이 필요한 feature들만 필터링
+  const needAnalysisFeatures = features.filter(f => {
+    const featureKey = `feature_${f.No}`;
+    return !initialFeatures[featureKey];
+  });
 
-  const prompt = `
-    You are a world-class advertising data analyst and Video Diagnostician. Your sole mission is to dissect the input advertising video (YouTube URL) frame by frame, and synthesize audio, text, structure, and performance data to convert it into highly detailed and objective data according to the given 156 analysis items.
+  console.log(`영상 "${video.title}": ${needAnalysisFeatures.length}개 항목 분석 필요`);
 
-    [Core Performance Principles]
-    Objectivity: Subjective impressions or evaluations are absolutely forbidden. All answers must be based on quantifiable or clearly observed facts. Instead of expressions like "beautiful" or "sad", describe specifically such as "warm tone colors used" or "slow tempo piano background music used".
-
-    Accuracy: All items must be analyzed without omission. If information is insufficient or judgment is impossible, specify "판단 불가" for that value.
-
-    Structure Compliance: The output must be in the specified JSON format. Do not add any conversation or explanation outside the JSON structure.
-
-    Based on the provided YouTube video information and script, analyze and provide values for each item in the feature list with extreme precision and objectivity.
-
-    **Video Information:**
-    - Title: ${snippet.title}
-    - Description: ${snippet.description}
-    - Script: """${script}"""
-    - Views: ${statistics.viewCount || 'N/A'}
-    - Likes: ${statistics.likeCount || 'N/A'}
-    - Duration: ${contentDetails.duration || 'N/A'}
-
-    **Analysis Feature List (156 items):**
-    ${featureText}
-
-    **Critical Instructions:**
-    1. Analyze ONLY features marked as "(분석 필요)" - do NOT re-analyze features marked as "(이미 설정됨: ...)"
-    2. Use only observable, measurable data
-    3. When script analysis is required, extract specific elements like dialogue tone, pace, keywords, emotional indicators
-    4. For visual elements, infer from title/description context when possible
-    5. Provide concrete values, not vague assessments
-    6. Use "판단 불가" only when truly impossible to determine
-    7. Focus on features that need analysis, skip those already set with YouTube metadata
-
-    **Output Format:**
-    응답 형식 (JSON만):
-    {
-      "feature_1": "분석 결과 또는 기본값",
-      "feature_2": "분석 결과 또는 기본값"
-    }
-    You MUST provide the analysis result ONLY in the following JSON format. Each feature's value must be a string. If analysis is impossible for an item, enter "판단 불가" as the value. Do NOT add any other explanations or markdown formatting.
-  `;
-
-  const result = await model.generateContent(prompt);
-  const resultResponse = await result.response;
-  const text = resultResponse.text();
-  
-  try {
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error(`Gemini 응답에서 JSON 형식을 찾을 수 없습니다. 응답: ${text}`);
-    const jsonString = jsonMatch[0];
-    let parsedResult = JSON.parse(jsonString);
-
-    parsedResult = { ...initialFeatures, ...parsedResult };
-
-    let retryCount = 0;
-    const maxRetries = 2;
-    
-    while (retryCount < maxRetries) {
-      const undeterminedKeys = hasUndeterminedValues(parsedResult);
-      
-      if (undeterminedKeys.length === 0) {
-        break;
-      }
-      
-      console.log(`영상 "${video.title}"에서 ${undeterminedKeys.length}개의 "판단 불가" 항목 발견. 재시도 ${retryCount + 1}/${maxRetries}`);
-      
-      try {
-        const retryResult = await retryAnalysisForUndetermined(
-          video, 
-          features, 
-          youtube, 
-          model, 
-          parsedResult, 
-          undeterminedKeys
-        );
-        parsedResult = { ...parsedResult, ...retryResult };
-        retryCount++;
-      } catch (retryError) {
-        console.error(`재시도 ${retryCount + 1} 실패:`, retryError);
-        break;
-      }
-    }
-
+  if (needAnalysisFeatures.length === 0) {
+    // 모든 feature가 이미 설정된 경우
     const categorizedAnalysis: { [category: string]: { [feature: string]: string } } = {};
-    
     features.forEach(feature => {
       const featureKey = `feature_${feature.No}`;
-      // 초기값이 있으면 사용하고, 없으면 Gemini 분석 결과 사용, 둘 다 없으면 "분석 불가"
-      let value = initialFeatures[featureKey] || parsedResult[featureKey] || "분석 불가";
+      const value = initialFeatures[featureKey] || "N/A";
       
       if (!categorizedAnalysis[feature.Category]) {
         categorizedAnalysis[feature.Category] = {};
@@ -344,9 +300,142 @@ async function analyzeSingleVideo(video: VideoInput, features: Feature[], youtub
       status: 'completed', 
       analysis: categorizedAnalysis 
     };
-  } catch (e: any) {
-    throw new Error(`Gemini 결과 처리 실패: ${e.message}.`);
   }
+
+  // 분석이 필요한 feature들을 배치로 나누어 처리 (한 번에 너무 많이 요청하지 않도록)
+  const batchSize = 30; // 한 번에 30개씩 처리
+  const batches = [];
+  for (let i = 0; i < needAnalysisFeatures.length; i += batchSize) {
+    batches.push(needAnalysisFeatures.slice(i, i + batchSize));
+  }
+
+  let allAnalysisResults: any = { ...initialFeatures };
+
+  for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+    const batch = batches[batchIndex];
+    console.log(`배치 ${batchIndex + 1}/${batches.length} 처리 중 (${batch.length}개 항목)`);
+
+    const featureText = batch.map(f => `${f.No}. ${f.Category} - ${f.Feature}`).join('\n');
+
+    const prompt = `
+다음 YouTube 영상을 분석하여 지정된 항목들에 대해 구체적인 값을 제공해주세요.
+
+영상 정보:
+- 제목: ${snippet.title}
+- 설명: ${snippet.description?.substring(0, 500) || 'N/A'}
+- 스크립트: ${script.substring(0, 1500) || 'N/A'}
+- 조회수: ${statistics.viewCount || 'N/A'}
+- 좋아요: ${statistics.likeCount || 'N/A'}
+- 길이: ${contentDetails.duration || 'N/A'}
+
+분석할 항목들:
+${featureText}
+
+각 항목에 대해 다음 중 하나로 응답해주세요:
+- 구체적인 값 (예: "남성", "20-30대", "검은색", "밝은 톤" 등)
+- 추정값 (예: "추정 25세", "약 5분", "실내로 추정" 등)
+- 불가능한 경우에만 "N/A"
+
+JSON 형식으로만 응답해주세요:
+{
+  "feature_1": "값",
+  "feature_2": "값"
+}
+    `;
+
+    try {
+      const result = await model.generateContent(prompt);
+      const resultResponse = await result.response;
+      const text = resultResponse.text();
+      
+      console.log(`배치 ${batchIndex + 1} Gemini 응답:`, text.substring(0, 200) + '...');
+      
+      // JSON 추출 개선
+      let jsonString = text.trim();
+      
+      // 마크다운 코드 블록 제거
+      if (jsonString.startsWith('```json')) {
+        jsonString = jsonString.replace(/```json\s*/, '').replace(/\s*```$/, '');
+      } else if (jsonString.startsWith('```')) {
+        jsonString = jsonString.replace(/```\s*/, '').replace(/\s*```$/, '');
+      }
+      
+      // JSON 객체 추출
+      const jsonMatch = jsonString.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) {
+        console.warn(`배치 ${batchIndex + 1}: JSON 형식을 찾을 수 없음, 기본값 사용`);
+        batch.forEach(feature => {
+          allAnalysisResults[`feature_${feature.No}`] = getDefaultValueForFeature(feature);
+        });
+        continue;
+      }
+      
+      const batchResult = JSON.parse(jsonMatch[0]);
+      allAnalysisResults = { ...allAnalysisResults, ...batchResult };
+      
+    } catch (e: any) {
+      console.error(`배치 ${batchIndex + 1} 분석 실패:`, e.message);
+      // 에러 발생 시 기본값으로 채우기
+      batch.forEach(feature => {
+        allAnalysisResults[`feature_${feature.No}`] = getDefaultValueForFeature(feature);
+      });
+    }
+
+    // 배치 간 잠시 대기 (API 제한 방지)
+    if (batchIndex < batches.length - 1) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+  }
+
+  // 재분석 시도 (판단 불가 항목들에 대해)
+  let retryCount = 0;
+  const maxRetries = 1; // 재시도 횟수 줄임
+  
+  while (retryCount < maxRetries) {
+    const undeterminedKeys = hasUndeterminedValues(allAnalysisResults);
+    
+    if (undeterminedKeys.length === 0) {
+      break;
+    }
+    
+    console.log(`영상 "${video.title}"에서 ${undeterminedKeys.length}개의 미분석 항목 발견. 재시도 ${retryCount + 1}/${maxRetries}`);
+    
+    try {
+      const retryResult = await retryAnalysisForUndetermined(
+        video, 
+        features, 
+        youtube, 
+        model, 
+        allAnalysisResults, 
+        undeterminedKeys
+      );
+      allAnalysisResults = { ...allAnalysisResults, ...retryResult };
+      retryCount++;
+    } catch (retryError) {
+      console.error(`재시도 ${retryCount + 1} 실패:`, retryError);
+      break;
+    }
+  }
+
+  // 최종 결과 정리
+  const categorizedAnalysis: { [category: string]: { [feature: string]: string } } = {};
+  
+  features.forEach(feature => {
+    const featureKey = `feature_${feature.No}`;
+    let value = allAnalysisResults[featureKey] || getDefaultValueForFeature(feature);
+    
+    if (!categorizedAnalysis[feature.Category]) {
+      categorizedAnalysis[feature.Category] = {};
+    }
+    categorizedAnalysis[feature.Category][feature.Feature] = value;
+  });
+
+  return { 
+    ...video, 
+    id: videoId, 
+    status: 'completed', 
+    analysis: categorizedAnalysis 
+  };
 }
 
 // --- API 라우트 핸들러 ---
@@ -380,12 +469,10 @@ export async function POST(req: NextRequest) {
     if (videos.length === 0) return NextResponse.json({ message: '분석할 영상이 없습니다.' }, { status: 400 });
 
     const features = getFeaturesFromCSV();
+    console.log(`총 ${features.length}개의 feature 로드됨`);
 
     const analysisResults = await Promise.allSettled(
       videos.map(async (video, index) => {
-        // 진행률 업데이트를 위한 콜백 함수 (클라이언트에서 사용)
-        // 이 부분은 실제 클라이언트와 서버 간의 실시간 통신이 필요합니다.
-        // 현재는 단순히 서버 로그에만 남기도록 합니다.
         console.log(`[Progress] Analyzing video ${index + 1} of ${videos.length}: ${video.title}`);
         return analyzeSingleVideo(video, features, youtube, model);
       })
