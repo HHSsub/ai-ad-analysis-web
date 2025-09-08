@@ -1,7 +1,7 @@
 // /src/app/page.tsx
 "use client";
 
-import { useState, ClipboardEvent, ChangeEvent, useRef, useEffect } from 'react';
+import { useState, ClipboardEvent, ChangeEvent, useEffect } from 'react';
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -25,7 +25,6 @@ export default function Home() {
   const [results, setResults] = useState<AnalysisResult[]>([]);
   const [selectedVideo, setSelectedVideo] = useState<AnalysisResult | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const pasteStartCell = useRef<{ rowIndex: number; colIndex: number } | null>(null);
 
   const completedVideos = results.filter((r): r is FulfilledResult => r.status === 'fulfilled');
   const failedVideos = results.filter((r): r is RejectedResult => r.status === 'rejected');
@@ -38,26 +37,24 @@ export default function Home() {
     );
   };
 
-  const handlePaste = (e: ClipboardEvent<HTMLTableSectionElement>) => {
-    if (!pasteStartCell.current) return;
+  const handlePaste = (e: ClipboardEvent<HTMLInputElement>, rowIndex: number, colIndex: number) => {
     e.preventDefault();
 
-    const { rowIndex: startRow, colIndex: startCol } = pasteStartCell.current;
     const pasteData = e.clipboardData.getData('text');
     const pastedRows = pasteData.split('\n').filter(row => row.trim() !== '');
     
     setVideos(currentVideos => {
       const newVideos = [...currentVideos];
       pastedRows.forEach((row, r_idx) => {
-        const currentRowIndex = startRow + r_idx;
+        const currentRowIndex = rowIndex + r_idx;
         if (currentRowIndex >= newVideos.length) return;
 
         const pastedCells = row.split('\t');
         const currentVideo = { ...newVideos[currentRowIndex] };
 
-        if (startCol <= 0 && pastedCells[0] !== undefined) currentVideo.title = pastedCells[0];
-        if (startCol <= 1 && pastedCells[1] !== undefined) currentVideo.url = pastedCells[1];
-        if (startCol <= 2 && pastedCells[2] !== undefined) currentVideo.notes = pastedCells[2];
+        if (colIndex <= 0 && pastedCells[0] !== undefined) currentVideo.title = pastedCells[0];
+        if (colIndex <= 1 && pastedCells[1] !== undefined) currentVideo.url = pastedCells[1];
+        if (colIndex <= 2 && pastedCells[2] !== undefined) currentVideo.notes = pastedCells[2];
           
         newVideos[currentRowIndex] = currentVideo;
       });
@@ -314,29 +311,32 @@ export default function Home() {
                       <TableHead className="w-[20%] font-semibold text-gray-700">비고</TableHead>
                     </TableRow>
                   </TableHeader>
-                  <TableBody onPaste={handlePaste}>
+                  <TableBody>
                     {videos.map((video, rowIndex) => (
                       <TableRow key={rowIndex} className="hover:bg-gray-50 transition-colors">
-                        <TableCell onFocus={() => pasteStartCell.current = { rowIndex, colIndex: 0 }}>
+                        <TableCell>
                           <Input 
                             value={video.title} 
                             onChange={(e) => handleInputChange(rowIndex, 'title', e.target.value)} 
+                            onPaste={(e) => handlePaste(e, rowIndex, 0)}
                             placeholder="영상 제목"
                             className="border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                           />
                         </TableCell>
-                        <TableCell onFocus={() => pasteStartCell.current = { rowIndex, colIndex: 1 }}>
+                        <TableCell>
                           <Input 
                             value={video.url} 
                             onChange={(e) => handleInputChange(rowIndex, 'url', e.target.value)} 
+                            onPaste={(e) => handlePaste(e, rowIndex, 1)}
                             placeholder="https://youtube.com/watch?v=..."
                             className="border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                           />
                         </TableCell>
-                        <TableCell onFocus={() => pasteStartCell.current = { rowIndex, colIndex: 2 }}>
+                        <TableCell>
                           <Input 
                             value={video.notes} 
                             onChange={(e) => handleInputChange(rowIndex, 'notes', e.target.value)} 
+                            onPaste={(e) => handlePaste(e, rowIndex, 2)}
                             placeholder="메모"
                             className="border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                           />
