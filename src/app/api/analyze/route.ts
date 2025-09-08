@@ -200,40 +200,47 @@ async function analyzeSingleVideo(video: VideoInput, features: Feature[], youtub
   // 초기 분석 프롬프트 구성 시 YouTube 메타데이터를 미리 채워 넣음
   const initialFeatures: { [key: string]: string } = {};
   features.forEach(f => {
-    let value = "분석 필요"; // 기본값
+    let value = ""; // 기본값을 빈 문자열로 변경
     // YouTube 메타데이터를 기반으로 초기값 설정
     switch (f.Feature) {
       case "전체 영상 길이":
-        value = contentDetails.duration || 'N/A';
+        value = contentDetails.duration || '';
         break;
       case "조회수":
-        value = statistics.viewCount || 'N/A';
+        value = statistics.viewCount || '';
         break;
       case "좋아요 수":
-        value = statistics.likeCount || 'N/A';
+        value = statistics.likeCount || '';
         break;
       case "채널명":
-        value = snippet.channelTitle || 'N/A';
+        value = snippet.channelTitle || '';
         break;
       case "영상 제목":
-        value = snippet.title || 'N/A';
+        value = snippet.title || '';
         break;
       case "영상 설명":
-        value = snippet.description || 'N/A';
+        value = snippet.description || '';
         break;
       case "게시일":
-        value = snippet.publishedAt ? new Date(snippet.publishedAt).toLocaleDateString() : 'N/A';
+        value = snippet.publishedAt ? new Date(snippet.publishedAt).toLocaleDateString() : '';
         break;
       case "카테고리":
-        value = videoDetails.snippet?.categoryId || 'N/A'; 
+        value = videoDetails.snippet?.categoryId || ''; 
         break;
     }
-    initialFeatures[`feature_${f.No}`] = value;
+    // 빈 값이 아닌 경우에만 초기값으로 설정
+    if (value) {
+      initialFeatures[`feature_${f.No}`] = value;
+    }
   });
 
   const featureText = features.map(f => {
     const initialValue = initialFeatures[`feature_${f.No}`];
-    return `- ${f.Category} | ${f.Feature}: ${initialValue === "분석 필요" ? "분석 필요" : `(초기값: ${initialValue})`}`;
+    if (initialValue) {
+      return `- ${f.Category} | ${f.Feature}: (이미 설정됨: ${initialValue})`;
+    } else {
+      return `- ${f.Category} | ${f.Feature}: (분석 필요)`;
+    }
   }).join('\n');
 
   const prompt = `
@@ -260,13 +267,13 @@ async function analyzeSingleVideo(video: VideoInput, features: Feature[], youtub
     ${featureText}
 
     **Critical Instructions:**
-    1. Analyze every single feature systematically
+    1. Analyze ONLY features marked as "(분석 필요)" - do NOT re-analyze features marked as "(이미 설정됨: ...)"
     2. Use only observable, measurable data
     3. When script analysis is required, extract specific elements like dialogue tone, pace, keywords, emotional indicators
     4. For visual elements, infer from title/description context when possible
     5. Provide concrete values, not vague assessments
     6. Use "판단 불가" only when truly impossible to determine
-    7. If a feature already has an initial value from YouTube metadata (e.g., "(초기값: N/A)"), you do NOT need to re-analyze it unless you can provide a more specific and accurate value. If you re-analyze, provide the new value. Otherwise, omit it from your JSON response.
+    7. Focus on features that need analysis, skip those already set with YouTube metadata
 
     **Output Format:**
     응답 형식 (JSON만):
@@ -322,7 +329,8 @@ async function analyzeSingleVideo(video: VideoInput, features: Feature[], youtub
     
     features.forEach(feature => {
       const featureKey = `feature_${feature.No}`;
-      const value = parsedResult[featureKey] || "분석 불가";
+      // 초기값이 있으면 사용하고, 없으면 Gemini 분석 결과 사용, 둘 다 없으면 "분석 불가"
+      let value = initialFeatures[featureKey] || parsedResult[featureKey] || "분석 불가";
       
       if (!categorizedAnalysis[feature.Category]) {
         categorizedAnalysis[feature.Category] = {};
