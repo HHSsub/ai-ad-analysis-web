@@ -41,25 +41,46 @@ export default function Home() {
     e.preventDefault();
 
     const pasteData = e.clipboardData.getData('text');
+    if (!pasteData) return;
+
     const pastedRows = pasteData.split('\n').filter(row => row.trim() !== '');
     
     setVideos(currentVideos => {
       const newVideos = [...currentVideos];
+      
       pastedRows.forEach((row, r_idx) => {
         const currentRowIndex = rowIndex + r_idx;
-        if (currentRowIndex >= newVideos.length) return;
+        
+        // 필요한 경우 행 추가
+        if (currentRowIndex >= newVideos.length) {
+          const additionalRows = currentRowIndex - newVideos.length + 1;
+          for (let i = 0; i < additionalRows; i++) {
+            newVideos.push({ title: '', url: '', notes: '' });
+          }
+        }
 
         const pastedCells = row.split('\t');
         const currentVideo = { ...newVideos[currentRowIndex] };
 
-        if (colIndex <= 0 && pastedCells[0] !== undefined) currentVideo.title = pastedCells[0];
-        if (colIndex <= 1 && pastedCells[1] !== undefined) currentVideo.url = pastedCells[1];
-        if (colIndex <= 2 && pastedCells[2] !== undefined) currentVideo.notes = pastedCells[2];
-          
+        // 컬럼 인덱스에 따라 적절한 필드에 데이터 할당
+        pastedCells.forEach((cell, cellIndex) => {
+          const targetColIndex = colIndex + cellIndex;
+          if (targetColIndex === 0) {
+            currentVideo.title = cell.trim();
+          } else if (targetColIndex === 1) {
+            currentVideo.url = cell.trim();
+          } else if (targetColIndex === 2) {
+            currentVideo.notes = cell.trim();
+          }
+        });
+
         newVideos[currentRowIndex] = currentVideo;
       });
+      
       return newVideos;
     });
+
+    toast.success(`${pastedRows.length}행의 데이터가 붙여넣어졌습니다.`);
   };
 
   const handleAnalyze = async () => {
@@ -245,7 +266,7 @@ export default function Home() {
                             {feature}
                           </TableCell>
                           <TableCell className={`py-3 ${
-                            value === '누락됨' || value === '분석 불가' || value === '판단 불가' || value === '판단불가'
+                            value === '누락됨' || value === '분석 불가' || value === '판단 불가' || value === '판단불가' || value === '분석 필요'
                               ? 'text-red-500 font-medium' 
                               : 'text-gray-700'
                           }`}>
