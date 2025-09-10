@@ -6,6 +6,7 @@ export const runtime = 'nodejs';
 type AnalysisItem = {
   title: string;
   url: string;
+  notes?: string;
   scriptLanguage?: string;
   completionStats?: { completed: number; incomplete: number; total: number; percentage: number };
   analysis: { [category: string]: { [feature: string]: string } };
@@ -19,7 +20,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ message: '분석 데이터가 없습니다.' }, { status: 400 });
     }
 
-    const fileName = `${video.title || 'analysis'}_분석결과.xlsx`;
+    const fileName = `${(video.title || 'analysis').replace(/[\\/:*?"<>|]/g, '_')}_분석결과.xlsx`;
     const buffer = await buildWorkbookBuffer([video], 'AI Ad Analysis');
 
     const headers = new Headers();
