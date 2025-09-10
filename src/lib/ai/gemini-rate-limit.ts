@@ -1,5 +1,3 @@
-// 프롬프트/파싱 로직 건드리지 않고, generateContent 호출만 감싸는 헬퍼
-
 class SimpleRpsLimiter {
   private rps: number;
   private tokens: number;
@@ -20,7 +18,7 @@ class SimpleRpsLimiter {
   }
 
   schedule<T>(fn: () => Promise<T>): Promise<T> {
-    if (this.rps === 0) return fn(); // 제한 없음
+    if (this.rps === 0) return fn();
     return new Promise<T>((resolve, reject) => {
       const run = () => {
         if (this.tokens > 0) {
