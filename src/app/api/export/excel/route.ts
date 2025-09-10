@@ -6,6 +6,7 @@ export const runtime = 'nodejs';
 type AnalysisItem = {
   title: string;
   url: string;
+  notes?: string;
   scriptLanguage?: string;
   completionStats?: { completed: number; incomplete: number; total: number; percentage: number };
   analysis: { [category: string]: { [feature: string]: string } };
