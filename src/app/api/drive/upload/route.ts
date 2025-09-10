@@ -1,12 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { google } from 'googleapis';
 import { buildWorkbookBuffer } from '@/lib/excel/buildWorkbook';
+import { Readable } from 'node:stream';
 
 export const runtime = 'nodejs';
 
 type AnalysisItem = {
   title: string;
   url: string;
+  notes?: string;
   scriptLanguage?: string;
   completionStats?: { completed: number; incomplete: number; total: number; percentage: number };
   analysis: { [category: string]: { [feature: string]: string } };
@@ -25,7 +27,9 @@ function resolveFolderId(input?: string): string | undefined {
 
 async function getDriveClient() {
   const raw = process.env.GOOGLE_SERVICE_ACCOUNT_CREDENTIALS;
-  if (!raw) throw new Error('GOOGLE_SERVICE_ACCOUNT_CREDENTIALS 환경변수가 설정되어 있지 않습니다.');
+  if (!raw) {
+    throw new Error('GOOGLE_SERVICE_ACCOUNT_CREDENTIALS 환경변수가 설정되어 있지 않습니다.');
+  }
   const credentials = JSON.parse(raw);
   const auth = new google.auth.GoogleAuth({
     credentials,
@@ -53,11 +57,13 @@ export async function POST(req: NextRequest) {
     const drive = await getDriveClient();
     const buffer = await buildWorkbookBuffer(items, workbookTitle);
 
+    const mediaStream = Readable.from(buffer);
+
     const res = await drive.files.create({
       requestBody: { name: fileName, parents: [folderId] },
       media: {
         mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        body: Buffer.from(buffer),
+        body: mediaStream,
       },
       fields: 'id, name, webViewLink, webContentLink',
     });
@@ -68,7 +74,7 @@ export async function POST(req: NextRequest) {
       name: res.data.name,
     });
   } catch (error: any) {
-    console.error('Drive 업로드 오류:', error);
+    console.error('Drive 업로드 오류:', error?.response?.data || error?.message || error);
     return NextResponse.json({ message: error?.message || '드라이브 업로드 중 오류' }, { status: 500 });
   }
 }
