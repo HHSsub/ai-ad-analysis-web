@@ -5,6 +5,7 @@ import { google } from 'googleapis';
 import { getSubtitles } from 'youtube-captions-scraper';
 import path from 'path';
 import fs from 'fs';
+import { callGeminiWithTransientRetry } from '@/lib/ai/gemini-rate-limit';
 
 /**
  * 최소 침습 RPS 리미터
@@ -420,7 +421,7 @@ async function analyzeSingleVideo(video: VideoInput, features: Feature[], youtub
       console.log(`분석 시도 ${attempt}/${maxRetries}: ${video.title}`);
       
       // 오버로딩 방지: 초당 호출 수 제한 적용(환경변수 GEMINI_RPS로 제어, 기본 0=무제한)
-      const result = await limiter.schedule(() => model.generateContent(prompt));
+      const result = await callGeminiWithTransientRetry(() => model.generateContent(prompt));
       const resultResponse = await result.response;
       const text = resultResponse.text();
       
