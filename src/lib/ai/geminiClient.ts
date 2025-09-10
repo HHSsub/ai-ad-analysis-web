@@ -17,8 +17,8 @@ const FALLBACK_MODELS = (process.env.GEMINI_FALLBACK_MODELS || "")
   .filter(Boolean);
 
 const MAX_RETRIES = parseInt(process.env.GEMINI_MAX_RETRIES || "6", 10);
-const BASE_MS = parseInt(process.env.GEMINI_BACKOFF_BASE_MS || "1000", 10); // 1s
-const CAP_MS = parseInt(process.env.GEMINI_BACKOFF_CAP_MS || "30000", 10);  // 30s
+const BASE_MS = parseInt(process.env.GEMINI_BACKOFF_BASE_MS || "1000", 10);
+const CAP_MS = parseInt(process.env.GEMINI_BACKOFF_CAP_MS || "30000", 10);
 
 function sleep(ms: number) {
   return new Promise((res) => setTimeout(res, ms));
@@ -35,21 +35,15 @@ function isRetriable(err: RetriableError) {
 function getRetryAfterMs(err: RetriableError): number | null {
   const headers = err?.response?.headers;
   if (!headers) return null;
-
-  // 다양한 클라이언트 형태 대응
   const headerVal =
     headers["retry-after"] ??
     headers["Retry-After"] ??
     headers.get?.("retry-after") ??
     headers.get?.("Retry-After");
-
   if (!headerVal) return null;
 
-  // Retry-After: seconds | HTTP-date
   const asNumber = Number(headerVal);
-  if (!Number.isNaN(asNumber)) {
-    return asNumber * 1000;
-  }
+  if (!Number.isNaN(asNumber)) return asNumber * 1000;
   const dateMs = Date.parse(headerVal);
   if (!Number.isNaN(dateMs)) {
     const delta = dateMs - Date.now();
@@ -59,19 +53,17 @@ function getRetryAfterMs(err: RetriableError): number | null {
 }
 
 function backoffMs(attempt: number) {
-  // Truncated exponential backoff + jitter
   const exp = Math.min(CAP_MS, BASE_MS * Math.pow(2, attempt));
-  const jitter = Math.random() * 0.2 * exp; // +-20% 지터
+  const jitter = Math.random() * 0.2 * exp;
   return Math.min(CAP_MS, Math.floor(exp * 0.9 + jitter));
 }
 
 export type GenerateOptions = {
-  parts: Part[]; // [{text: "..."}] 등
+  parts: Part[];
   model?: string;
   systemInstruction?: string;
   generationConfig?: Record<string, any>;
   safetySettings?: Record<string, any>;
-  // 특정 호출에서 재시도/백오프 오버라이드
   maxRetries?: number;
   onRetry?: (info: {
     attempt: number;
@@ -94,7 +86,6 @@ export async function generateContentWithRetry(opts: GenerateOptions) {
   } = opts;
 
   const models = [model, ...FALLBACK_MODELS];
-
   const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
 
   let lastError: unknown;
@@ -107,10 +98,8 @@ export async function generateContentWithRetry(opts: GenerateOptions) {
         const modelClient = genAI.getGenerativeModel({
           model: currentModel,
           systemInstruction,
-          // generationConfig/safetySettings는 여기서 기본값 포함 가능
         });
 
-        // 전역 동시성/RPS 제한 하에 실행
         const result = await limiter.schedule(() =>
           modelClient.generateContent({
             contents: [{ role: "user", parts }],
@@ -119,17 +108,25 @@ export async function generateContentWithRetry(opts: GenerateOptions) {
           } as any)
         );
 
-        const text = result?.response?.text?.() ?? "";
-        return { text, response: result?.response, model: currentModel };
+        const rawResp = result?.response;
+        const text = rawResp?.text?.() ?? "";
+
+        // 빈 응답/후보 없음은 재시도 유도
+        const candidates = (rawResp as any)?.candidates ?? [];
+        if (!text || !text.trim() || candidates.length === 0) {
+          const err = new Error("Empty response from Gemini");
+          (err as any).response = { status: 503 }; // 재시도 대상
+          throw err;
+        }
+
+        return { text, response: rawResp, model: currentModel };
       } catch (error: any) {
         lastError = error;
 
         if (!isRetriable(error) || attempt === maxRetries) {
-          // 재시도 불가 또는 재시도 초과 => 다음 모델로 폴백 시도, 마지막 모델이면 throw
-          break;
+          break; // 다음 모델로 폴백
         }
 
-        // Retry-After 우선 적용
         const retryAfter = getRetryAfterMs(error);
         const delay = retryAfter ?? backoffMs(attempt);
 
@@ -144,15 +141,12 @@ export async function generateContentWithRetry(opts: GenerateOptions) {
         await sleep(delay);
       }
     }
-
-    // 다음 모델로 폴백 진행 (현재 모델에서 성공 못함)
+    // 다음 모델로 폴백
   }
 
-  // 모든 모델/재시도 실패
   const status = (lastError as any)?.response?.status ?? (lastError as any)?.status;
   const message =
-    (lastError as any)?.message ||
-    "Gemini generateContent failed after retries and model fallbacks.";
+    (lastError as any)?.message || "Gemini generateContent failed after retries and model fallbacks.";
   const err = new Error(`[Gemini] ${status || ""} ${message}`.trim());
   (err as any).cause = lastError;
   throw err;
