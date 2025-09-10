@@ -10,6 +10,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Loader2, AlertCircle, CheckCircle, Download, Upload, Plus, Trash2, BarChart3 } from "lucide-react";
 import toast from 'react-hot-toast';
 
+// z+: 일괄/개별 내보내기 컴포넌트 추가
+import ResultsFooter from "@/components/ResultsFooter";
+import DriveUploadButton from "@/components/DriveUploadButton";
+
 // --- 타입 정의 ---
 type VideoRow = { title: string; url: string; notes: string; };
 type AnalysisStatus = 'welcome' | 'input' | 'loading' | 'completed';
@@ -169,7 +173,7 @@ export default function Home() {
     }
   };
 
-  // 다운로드 기능
+  // 다운로드 기능 (개별)
   const handleDownload = async () => {
     if (!selectedVideo || selectedVideo.status !== 'fulfilled') {
       toast.error('분석 완료된 영상을 선택해주세요.');
@@ -268,6 +272,14 @@ export default function Home() {
               <Download className="mr-2 h-4 w-4" />
               결과 다운로드
             </Button>
+
+            {/* z+: 개별 드라이브 업로드 버튼 추가 (기존 구조/스타일 유지, 클래스만 전달) */}
+            <DriveUploadButton
+              items={[selectedVideo.value]}
+              fileName={`${selectedVideo.value.title}_분석결과.xlsx`}
+              workbookTitle="AI Ad Analysis"
+              className="inline-flex items-center px-3 py-1.5 text-sm border rounded hover:bg-blue-50 transition-colors"
+            />
           </div>
         </CardHeader>
         <CardContent>
@@ -468,83 +480,90 @@ export default function Home() {
       )}
 
       {analysisStatus === 'completed' && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          <div className="lg:col-span-1 flex flex-col gap-6">
-            <Card className="shadow-lg border-0">
-              <CardHeader className="bg-gradient-to-r from-green-50 to-emerald-50">
-                <CardTitle className="flex items-center text-lg font-bold text-gray-800">
-                  <CheckCircle className="mr-3 text-green-500 h-5 w-5" /> 
-                  분석 완료 ({completedVideos.length})
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="max-h-96 overflow-y-auto p-4">
-                <ul className="space-y-3">
-                  {completedVideos.map(item => (
-                    <li 
-                      key={item.value.id} 
-                      onClick={() => setSelectedVideo(item)} 
-                      className={`p-3 rounded-lg cursor-pointer transition-all ${
-                        selectedVideo?.value?.id === item.value.id 
-                          ? 'bg-blue-100 text-blue-800 border-2 border-blue-200' 
-                          : 'hover:bg-gray-50 border border-gray-200'
-                      }`}
-                    >
-                      <div className="font-medium mb-1">{item.value.title}</div>
-                      <div className="flex justify-between text-sm">
-                        <span className="text-gray-500">완료도: {item.value.completionStats.percentage}%</span>
-                        <span className="text-gray-500">
-                          {item.value.completionStats.completed}/{item.value.completionStats.total}
-                        </span>
-                      </div>
-                      <div className="w-full bg-gray-200 rounded-full h-2 mt-2">
-                        <div 
-                          className="bg-green-500 h-2 rounded-full transition-all" 
-                          style={{ width: `${item.value.completionStats.percentage}%` }}
-                        />
-                      </div>
-                      {item.value.scriptLanguage && item.value.scriptLanguage !== 'none' && (
-                        <div className="text-xs text-blue-600 mt-1">
-                          언어: {item.value.scriptLanguage}
+        <>
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            <div className="lg:col-span-1 flex flex-col gap-6">
+              <Card className="shadow-lg border-0">
+                <CardHeader className="bg-gradient-to-r from-green-50 to-emerald-50">
+                  <CardTitle className="flex items-center text-lg font-bold text-gray-800">
+                    <CheckCircle className="mr-3 text-green-500 h-5 w-5" /> 
+                    분석 완료 ({completedVideos.length})
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="max-h-96 overflow-y-auto p-4">
+                  <ul className="space-y-3">
+                    {completedVideos.map(item => (
+                      <li 
+                        key={item.value.id} 
+                        onClick={() => setSelectedVideo(item)} 
+                        className={`p-3 rounded-lg cursor-pointer transition-all ${
+                          selectedVideo?.value?.id === item.value.id 
+                            ? 'bg-blue-100 text-blue-800 border-2 border-blue-200' 
+                            : 'hover:bg-gray-50 border border-gray-200'
+                        }`}
+                      >
+                        <div className="font-medium mb-1">{item.value.title}</div>
+                        <div className="flex justify-between text-sm">
+                          <span className="text-gray-500">완료도: {item.value.completionStats.percentage}%</span>
+                          <span className="text-gray-500">
+                            {item.value.completionStats.completed}/{item.value.completionStats.total}
+                          </span>
                         </div>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              </CardContent>
-            </Card>
+                        <div className="w-full bg-gray-200 rounded-full h-2 mt-2">
+                          <div 
+                            className="bg-green-500 h-2 rounded-full transition-all" 
+                            style={{ width: `${item.value.completionStats.percentage}%` }}
+                          />
+                        </div>
+                        {item.value.scriptLanguage && item.value.scriptLanguage !== 'none' && (
+                          <div className="text-xs text-blue-600 mt-1">
+                            언어: {item.value.scriptLanguage}
+                          </div>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </CardContent>
+              </Card>
 
-            <Card className="shadow-lg border-0">
-              <CardHeader className="bg-gradient-to-r from-red-50 to-rose-50">
-                <CardTitle className="flex items-center text-lg font-bold text-gray-800">
-                  <AlertCircle className="mr-3 text-red-500 h-5 w-5" /> 
-                  분석 미완 ({failedVideos.length})
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="max-h-96 overflow-y-auto p-4">
-                <ul className="space-y-3">
-                  {failedVideos.map(item => (
-                    <li 
-                      key={item.reason.id} 
-                      onClick={() => setSelectedVideo(item)} 
-                      className={`p-3 rounded-lg cursor-pointer transition-all ${
-                        selectedVideo?.reason?.id === item.reason.id 
-                          ? 'bg-red-100 text-red-800 border-2 border-red-200' 
-                          : 'hover:bg-gray-50 border border-gray-200'
-                      }`}
-                    >
-                      <div className="font-medium text-red-700">{item.reason.title}</div>
-                      <div className="text-sm text-red-500 mt-1">분석 실패: {item.reason.error}</div>
-                    </li>
-                  ))}
-                </ul>
-              </CardContent>
-            </Card>
+              <Card className="shadow-lg border-0">
+                <CardHeader className="bg-gradient-to-r from-red-50 to-rose-50">
+                  <CardTitle className="flex items-center text-lg font-bold text-gray-800">
+                    <AlertCircle className="mr-3 text-red-500 h-5 w-5" /> 
+                    분석 미완 ({failedVideos.length})
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="max-h-96 overflow-y-auto p-4">
+                  <ul className="space-y-3">
+                    {failedVideos.map(item => (
+                      <li 
+                        key={item.reason.id} 
+                        onClick={() => setSelectedVideo(item)} 
+                        className={`p-3 rounded-lg cursor-pointer transition-all ${
+                          selectedVideo?.reason?.id === item.reason.id 
+                            ? 'bg-red-100 text-red-800 border-2 border-red-200' 
+                            : 'hover:bg-gray-50 border border-gray-200'
+                        }`}
+                      >
+                        <div className="font-medium text-red-700">{item.reason.title}</div>
+                        <div className="text-sm text-red-500 mt-1">분석 실패: {item.reason.error}</div>
+                      </li>
+                    ))}
+                  </ul>
+                </CardContent>
+              </Card>
+            </div>
+
+            <div className="lg:col-span-2">
+              {renderAnalysisDetail()}
+            </div>
           </div>
 
-          <div className="lg:col-span-2">
-            {renderAnalysisDetail()}
+          {/* z+: 일괄 Excel 다운로드 / 일괄 Drive 업로드 푸터 */}
+          <div className="mt-6">
+            <ResultsFooter results={results as any} />
           </div>
-        </div>
+        </>
       )}
 
       {analysisStatus === 'welcome' && (
