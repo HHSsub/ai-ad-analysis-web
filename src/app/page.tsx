@@ -1,7 +1,7 @@
 // /src/app/page.tsx
 "use client";
 
-import { useState, ClipboardEvent } from 'react';
+import { useState, ClipboardEvent, useEffect, useRef } from 'react';
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -10,7 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Loader2, AlertCircle, CheckCircle, Download, Plus, Trash2, BarChart3 } from "lucide-react";
 import toast from 'react-hot-toast';
 
-// z+: 일괄/개별 내보내기 컴포넌트 추가
+// z+ 세션 보존: 일괄/개별 내보내기 컴포넌트는 그대로 유지
 import ResultsFooter from "@/components/ResultsFooter";
 import DriveUploadButton from "@/components/DriveUploadButton";
 
@@ -52,6 +52,9 @@ type RejectedResult = {
 
 type AnalysisResult = FulfilledResult | RejectedResult;
 
+// z+ 세션 저장 키
+const SESSION_KEY = 'ai-ad-analysis-session-v1';
+
 const INITIAL_ROWS = 10;
 
 export default function Home() {
@@ -66,6 +69,102 @@ export default function Home() {
   const completedVideos = results.filter((r): r is FulfilledResult => r.status === 'fulfilled');
   const failedVideos = results.filter((r): r is RejectedResult => r.status === 'rejected');
 
+  // z+ 세션 자동 저장 디바운스 타이머
+  const saveTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const mountedRef = useRef(false);
+
+  // z+ 세션 저장
+  const saveSession = () => {
+    try {
+      const payload = {
+        version: 1,
+        timestamp: Date.now(),
+        videos,
+        analysisStatus,
+        results,
+        selectedVideo,
+        error,
+      };
+      localStorage.setItem(SESSION_KEY, JSON.stringify(payload));
+      // 너무 잦은 토스트는 방지
+      // console.debug('session saved');
+    } catch (e) {
+      console.error('세션 저장 실패:', e);
+    }
+  };
+
+  // z+ 세션 로드
+  const loadSession = () => {
+    try {
+      const raw = localStorage.getItem(SESSION_KEY);
+      if (!raw) return false;
+      const data = JSON.parse(raw);
+      if (!data || typeof data !== 'object') return false;
+
+      if (Array.isArray(data.videos)) setVideos(data.videos);
+      if (data.analysisStatus) setAnalysisStatus(data.analysisStatus);
+      if (Array.isArray(data.results)) setResults(data.results);
+      if (data.selectedVideo) setSelectedVideo(data.selectedVideo);
+      if (typeof data.error === 'string' || data.error === null) setError(data.error ?? null);
+
+      toast.success('이전 작업 세션을 복원했습니다.');
+      return true;
+    } catch (e) {
+      console.error('세션 로드 실패:', e);
+      return false;
+    }
+  };
+
+  // z+ 세션 초기화
+  const clearSession = () => {
+    localStorage.removeItem(SESSION_KEY);
+  };
+
+  // z+ 마운트 시 자동 복원 (초기 빈 상태일 때)
+  useEffect(() => {
+    if (mountedRef.current) return;
+    mountedRef.current = true;
+
+    // 오프라인/온라인 이벤트
+    const handleOnline = () => toast.success('네트워크 연결이 복구되었습니다.');
+    const handleOffline = () => toast.error('네트워크 연결이 끊겼습니다. 진행 상태는 자동 저장됩니다.');
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    // 초기 자동 복원
+    try {
+      const raw = localStorage.getItem(SESSION_KEY);
+      const hasDefaultVideos = videos.every(v => !v.title && !v.url && !v.notes);
+      const hasNoResults = results.length === 0;
+      if (raw && hasDefaultVideos && hasNoResults && analysisStatus === 'welcome') {
+        loadSession();
+      }
+    } catch {}
+
+    // 언마운트/탭 닫기 시 저장
+    const beforeUnload = () => {
+      saveSession();
+    };
+    window.addEventListener('beforeunload', beforeUnload);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+      window.removeEventListener('beforeunload', beforeUnload);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // z+ 상태 변경 시 자동 저장(디바운스)
+  useEffect(() => {
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+    }
+    saveTimerRef.current = setTimeout(saveSession, 1200);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [videos, analysisStatus, results, selectedVideo, error]);
+
+  // 테이블 관련 함수들
   const handleInputChange = (index: number, field: keyof VideoRow, value: string) => {
     setVideos(currentVideos => 
       currentVideos.map((video, i) => 
@@ -102,6 +201,7 @@ export default function Home() {
       pastedRows.forEach((row, r_idx) => {
         const currentRowIndex = rowIndex + r_idx;
         
+        // 필요한 경우 행 자동 추가
         if (currentRowIndex >= newVideos.length) {
           const additionalRows = currentRowIndex - newVideos.length + 1;
           for (let i = 0; i < additionalRows; i++) {
@@ -132,11 +232,15 @@ export default function Home() {
     toast.success(`${pastedRows.length}행의 데이터가 붙여넣어졌습니다.`);
   };
 
+  // 분석 시작
   const handleAnalyze = async () => {
     setAnalysisStatus('loading');
     setError(null);
     setResults([]);
     setSelectedVideo(null);
+
+    // z+: 분석 시작 직전 세션 저장(네트워크 끊겨도 복원 가능)
+    saveSession();
 
     const videosToAnalyze = videos.filter(v => v.url.trim() !== '');
     if (videosToAnalyze.length === 0) {
@@ -152,21 +256,34 @@ export default function Home() {
         body: JSON.stringify({ videos: videosToAnalyze }),
       });
 
-      const data = await response.json();
+      // 네트워크 레벨 실패 방지: ok가 아니면 에러 처리
+      const data = await response.json().catch(async () => {
+        // 서버가 분석 계속 진행 중일 수 있음. 클라이언트는 세션을 보존하므로 재시도 가능.
+        throw new Error(`서버 응답 오류: ${response.status}`);
+      });
       if (!response.ok) throw new Error(data.message || `서버 에러: ${response.status}`);
       
       setResults(data.results);
+
+      // 분석 결과 통계
       const successCount = data.results.filter((r: AnalysisResult) => r.status === 'fulfilled').length;
       const failCount = data.results.filter((r: AnalysisResult) => r.status === 'rejected').length;
       toast.success(`분석 완료! 성공: ${successCount}개, 실패: ${failCount}개`);
+
+      // z+: 완료 후 세션 저장(결과 포함)
+      saveSession();
     } catch (err: any) {
-      setError(err.message);
-      toast.error(`분석 중 오류 발생: ${err.message}`);
+      // 네트워크 단절 등
+      setError(err.message || '분석 요청 중 오류가 발생했습니다.');
+      toast.error(`분석 중 오류 발생: ${err.message || '네트워크 오류'}`);
     } finally {
       setAnalysisStatus('completed');
+      // 상태 전환 후 저장
+      saveSession();
     }
   };
 
+  // 다운로드 기능 (개별)
   const handleDownload = async () => {
     if (!selectedVideo || selectedVideo.status !== 'fulfilled') {
       toast.error('분석 완료된 영상을 선택해주세요.');
@@ -199,6 +316,7 @@ export default function Home() {
     }
   };
 
+  // 상세 분석 결과 렌더링
   const renderAnalysisDetail = () => {
     if (!selectedVideo) return (
       <div className="text-center text-gray-500 mt-10">
@@ -228,6 +346,8 @@ export default function Home() {
       <Card className="w-full">
         <CardHeader>
           <CardTitle className="text-xl font-bold mb-4">{selectedVideo.value.title}</CardTitle>
+          
+          {/* 완료도 통계 */}
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6 p-4 bg-gray-50 rounded-lg">
             <div className="text-center">
               <div className="text-2xl font-bold text-green-600">{stats.completed}</div>
@@ -246,9 +366,12 @@ export default function Home() {
               <div className="text-sm text-gray-600">완료율</div>
             </div>
           </div>
+
+          {/* 언어 정보 */}
           <div className="mb-4 text-sm text-gray-600">
             <span className="font-medium">자막 언어:</span> {selectedVideo.value.scriptLanguage || 'none'}
           </div>
+          
           <div className="flex space-x-3 mb-6">
             <Button 
               variant="outline" 
@@ -259,7 +382,8 @@ export default function Home() {
               <Download className="mr-2 h-4 w-4" />
               결과 다운로드
             </Button>
-            {/* z+: 개별 드라이브 업로드 버튼 */}
+
+            {/* z+: 개별 드라이브 업로드 버튼 추가 (기존 구조/스타일 유지, 클래스만 전달) */}
             <DriveUploadButton
               items={[selectedVideo.value]}
               fileName={`${selectedVideo.value.title}_분석결과.xlsx`}
@@ -281,6 +405,7 @@ export default function Home() {
                 </TabsTrigger>
               ))}
             </TabsList>
+            
             {categories.map(category => (
               <TabsContent key={category} value={category} className="mt-6">
                 <div className="rounded-lg border border-gray-200 overflow-hidden">
@@ -297,6 +422,7 @@ export default function Home() {
                                            String(value).startsWith('판단불가/') || 
                                            value === 'N/A' || 
                                            value === '미확인';
+                        
                         return (
                           <TableRow 
                             key={feature}
@@ -305,7 +431,11 @@ export default function Home() {
                             <TableCell className="font-medium text-gray-800 py-3">
                               {feature}
                             </TableCell>
-                            <TableCell className={`py-3 ${isIncomplete ? 'text-red-500 font-medium' : 'text-gray-700'}`}>
+                            <TableCell className={`py-3 ${
+                              isIncomplete
+                                ? 'text-red-500 font-medium' 
+                                : 'text-gray-700'
+                            }`}>
                               {value}
                             </TableCell>
                           </TableRow>
@@ -333,8 +463,17 @@ export default function Home() {
         </h1>
         {analysisStatus === 'welcome' && (
           <div className="space-x-3">
-            <Button disabled className="bg-gray-300 text-gray-500 cursor-not-allowed">수집 자동화 (개발중)</Button>
-            <Button variant="default" onClick={() => setAnalysisStatus('input')} className="bg-blue-600 hover:bg-blue-700 text-white font-medium px-6 py-2 transition-colors">
+            <Button 
+              disabled 
+              className="bg-gray-300 text-gray-500 cursor-not-allowed"
+            >
+              수집 자동화 (개발중)
+            </Button>
+            <Button 
+              variant="default" 
+              onClick={() => setAnalysisStatus('input')}
+              className="bg-blue-600 hover:bg-blue-700 text-white font-medium px-6 py-2 transition-colors"
+            >
               링크 수동 추가
             </Button>
           </div>
@@ -392,7 +531,13 @@ export default function Home() {
                           />
                         </TableCell>
                         <TableCell className="text-center">
-                          <Button variant="outline" size="sm" onClick={() => removeRow(rowIndex)} disabled={videos.length <= 1} className="text-red-600 hover:text-red-800 hover:bg-red-50">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => removeRow(rowIndex)}
+                            disabled={videos.length <= 1}
+                            className="text-red-600 hover:text-red-800 hover:bg-red-50"
+                          >
                             <Trash2 className="h-4 w-4" />
                           </Button>
                         </TableCell>
@@ -401,16 +546,27 @@ export default function Home() {
                   </TableBody>
                 </Table>
               </div>
+              
+              {/* 행 추가 버튼 */}
               <div className="mt-4 text-center">
-                <Button variant="outline" onClick={addNewRow} className="bg-green-50 text-green-700 border-green-300 hover:bg-green-100 hover:border-green-400">
+                <Button
+                  variant="outline"
+                  onClick={addNewRow}
+                  className="bg-green-50 text-green-700 border-green-300 hover:bg-green-100 hover:border-green-400"
+                >
                   <Plus className="mr-2 h-4 w-4" />
                   행 추가
                 </Button>
               </div>
             </CardContent>
           </Card>
+          
           <div className="text-center my-8">
-            <Button onClick={handleAnalyze} size="lg" className="bg-green-600 hover:bg-green-700 text-white font-semibold px-8 py-3 text-lg transition-colors shadow-lg">
+            <Button 
+              onClick={handleAnalyze} 
+              size="lg"
+              className="bg-green-600 hover:bg-green-700 text-white font-semibold px-8 py-3 text-lg transition-colors shadow-lg"
+            >
               분석 시작
             </Button>
           </div>
@@ -450,18 +606,29 @@ export default function Home() {
                       <li 
                         key={item.value.id} 
                         onClick={() => setSelectedVideo(item)} 
-                        className={`p-3 rounded-lg cursor-pointer transition-all ${selectedVideo?.value?.id === item.value.id ? 'bg-blue-100 text-blue-800 border-2 border-blue-200' : 'hover:bg-gray-50 border border-gray-200'}`}
+                        className={`p-3 rounded-lg cursor-pointer transition-all ${
+                          selectedVideo?.value?.id === item.value.id 
+                            ? 'bg-blue-100 text-blue-800 border-2 border-blue-200' 
+                            : 'hover:bg-gray-50 border border-gray-200'
+                        }`}
                       >
                         <div className="font-medium mb-1">{item.value.title}</div>
                         <div className="flex justify-between text-sm">
                           <span className="text-gray-500">완료도: {item.value.completionStats.percentage}%</span>
-                          <span className="text-gray-500">{item.value.completionStats.completed}/{item.value.completionStats.total}</span>
+                          <span className="text-gray-500">
+                            {item.value.completionStats.completed}/{item.value.completionStats.total}
+                          </span>
                         </div>
                         <div className="w-full bg-gray-200 rounded-full h-2 mt-2">
-                          <div className="bg-green-500 h-2 rounded-full transition-all" style={{ width: `${item.value.completionStats.percentage}%` }} />
+                          <div 
+                            className="bg-green-500 h-2 rounded-full transition-all" 
+                            style={{ width: `${item.value.completionStats.percentage}%` }}
+                          />
                         </div>
                         {item.value.scriptLanguage && item.value.scriptLanguage !== 'none' && (
-                          <div className="text-xs text-blue-600 mt-1">언어: {item.value.scriptLanguage}</div>
+                          <div className="text-xs text-blue-600 mt-1">
+                            언어: {item.value.scriptLanguage}
+                          </div>
                         )}
                       </li>
                     ))}
@@ -482,7 +649,11 @@ export default function Home() {
                       <li 
                         key={item.reason.id} 
                         onClick={() => setSelectedVideo(item)} 
-                        className={`p-3 rounded-lg cursor-pointer transition-all ${selectedVideo?.reason?.id === item.reason.id ? 'bg-red-100 text-red-800 border-2 border-red-200' : 'hover:bg-gray-50 border border-gray-200'}`}
+                        className={`p-3 rounded-lg cursor-pointer transition-all ${
+                          selectedVideo?.reason?.id === item.reason.id 
+                            ? 'bg-red-100 text-red-800 border-2 border-red-200' 
+                            : 'hover:bg-gray-50 border border-gray-200'
+                        }`}
                       >
                         <div className="font-medium text-red-700">{item.reason.title}</div>
                         <div className="text-sm text-red-500 mt-1">분석 실패: {item.reason.error}</div>
@@ -523,7 +694,11 @@ export default function Home() {
               <p className="text-sm text-gray-600">분석불가 사유 제공</p>
             </div>
           </div>
-          <Button onClick={() => setAnalysisStatus('input')} size="lg" className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-8 py-3 text-lg transition-colors shadow-lg">
+          <Button 
+            onClick={() => setAnalysisStatus('input')} 
+            size="lg"
+            className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-8 py-3 text-lg transition-colors shadow-lg"
+          >
             분석 시작하기
           </Button>
           <p className="text-sm text-gray-500 mt-4">한국어, 영어, 일본어, 중국어 등 다국어 영상 지원</p>
