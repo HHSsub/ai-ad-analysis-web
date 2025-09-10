@@ -6,6 +6,58 @@ import { getSubtitles } from 'youtube-captions-scraper';
 import path from 'path';
 import fs from 'fs';
 
+/**
+ * 최소 침습 RPS 리미터
+ * - 외부 모듈 없이 초당 요청 수 제한만 수행
+ * - 기본값 0 = 제한 없음 (기존 동작과 동일)
+ * - 필요 시 환경변수 GEMINI_RPS=1 처럼 설정
+ */
+class SimpleRpsLimiter {
+  private rps: number;
+  private tokens: number;
+  private queue: Array<() => void> = [];
+  private timer?: NodeJS.Timeout;
+
+  constructor(rps: number) {
+    this.rps = Math.max(0, rps);
+    this.tokens = this.rps;
+    if (this.rps > 0) {
+      this.timer = setInterval(() => {
+        this.tokens = this.rps;
+        this.drain();
+      }, 1000);
+      // @ts-ignore
+      this.timer?.unref?.();
+    }
+  }
+
+  schedule<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.rps === 0) return fn(); // 제한 없음 → 즉시 실행
+    return new Promise<T>((resolve, reject) => {
+      const run = () => {
+        if (this.tokens > 0) {
+          this.tokens -= 1;
+          fn().then(resolve).catch(reject);
+        } else {
+          this.queue.push(run);
+        }
+      };
+      run();
+    });
+  }
+
+  private drain() {
+    while (this.tokens > 0 && this.queue.length > 0) {
+      const next = this.queue.shift()!;
+      this.tokens -= 1;
+      next();
+    }
+  }
+}
+
+const GEMINI_RPS = parseInt(process.env.GEMINI_RPS || '0', 10);
+const limiter = new SimpleRpsLimiter(GEMINI_RPS);
+
 // --- 타입 정의 ---
 interface VideoInput {
   title: string;
@@ -117,14 +169,14 @@ function createExpertAnalysisPrompt(videoData: any, features: Feature[], scriptD
   return `
 # PERSONA: YouTube Video Analysis Expert
 
-You are a **YouTube Video Analysis Expert** and the user's content creation partner. Your core competency is analyzing ANY YouTube URL provided by the user, focusing intensively on the content to deliver comprehensive analysis reports and actionable insights.
+You are a **YouTube Video Analysis Expert** and the user's content creation partner. Your core competency is analyzing ANY YouTube URL provided by the user, focusing intensively on the content to[...]
 
 ## CRITICAL ANALYSIS FRAMEWORK
 
 ### 1. IMMEDIATE VIDEO ASSESSMENT
 **Video Type:** ${isShortVideo ? 'SHORT VIDEO (≤60 seconds)' : 'STANDARD VIDEO (>60 seconds)'}
 **Duration:** ${durationSeconds} seconds
-**Analysis Strategy:** ${isShortVideo ? 'INTENSIVE MICRO-ANALYSIS - Every frame counts, focus on rapid visual cues and immediate impressions' : 'COMPREHENSIVE ANALYSIS - Detailed examination of all elements'}
+**Analysis Strategy:** ${isShortVideo ? 'INTENSIVE MICRO-ANALYSIS - Every frame counts, focus on rapid visual cues and immediate impressions' : 'COMPREHENSIVE ANALYSIS - Detailed examination of a[...]}
 
 ### 2. VIDEO INFORMATION DATABASE
 - **Title:** ${snippet.title}
@@ -205,7 +257,7 @@ Provide your analysis in JSON format with exactly these keys:
   "feature_156": "specific analyzed value or 분석불가/specific reason"
 }
 
-**REMEMBER:** You are an expert analyst. Even a 15-second commercial should provide enough visual information for most human, clothing, setting, and product features. Be confident in your visual assessment abilities.
+**REMEMBER:** You are an expert analyst. Even a 15-second commercial should provide enough visual information for most human, clothing, setting, and product features. Be confident in your visual [...]
 `;
 }
 
@@ -367,7 +419,8 @@ async function analyzeSingleVideo(video: VideoInput, features: Feature[], youtub
       
       console.log(`분석 시도 ${attempt}/${maxRetries}: ${video.title}`);
       
-      const result = await model.generateContent(prompt);
+      // 오버로딩 방지: 초당 호출 수 제한 적용(환경변수 GEMINI_RPS로 제어, 기본 0=무제한)
+      const result = await limiter.schedule(() => model.generateContent(prompt));
       const resultResponse = await result.response;
       const text = resultResponse.text();
       
