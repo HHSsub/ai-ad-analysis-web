@@ -7,8 +7,8 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
 // Gemini를 사용하여 영상 분석
 export async function analyzeVideoWithGemini(videoUrl: string, existingFeatures: any = {}) {
   try {
-    // ✅ 모델 이름 수정: gemini-pro → gemini-1.5-flash
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    // ✅ 모델 이름 수정: gemini-pro → gemini-2.5-flash
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
     // 분석이 필요한 feature들 찾기
     const missingFeatures = VIDEO_FEATURES.filter(feature => {

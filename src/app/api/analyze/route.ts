@@ -20,22 +20,37 @@ interface Feature {
   Value: string;
 }
 
-// --- 헬퍼 함수: CSV 파싱 (개선된 버전) ---
+// --- 다국어 지원 자막 추출 ---
+async function extractSubtitles(videoId: string): Promise<{ text: string; language: string }> {
+  const languages = ['ko', 'en', 'ja', 'zh', 'es', 'fr', 'de', 'it', 'pt', 'ru', 'ar'];
+  
+  for (const lang of languages) {
+    try {
+      const subtitles = await getSubtitles({ videoID: videoId, lang });
+      const text = subtitles.map(sub => sub.text).join(' ');
+      console.log(`${lang} 자막 추출 성공 (${text.length}자)`);
+      return { text, language: lang };
+    } catch (e) {
+      continue;
+    }
+  }
+  
+  console.log('자막 추출 실패 - 모든 언어 시도했으나 실패');
+  return { text: '', language: 'none' };
+}
+
+// --- CSV 파싱 함수 ---
 function getFeaturesFromCSV(): Feature[] {
   const filePath = path.join(process.cwd(), 'src', 'data', 'output_features.csv');
   try {
     let fileContent = fs.readFileSync(filePath, 'utf-8');
     
-    // BOM 제거
     if (fileContent.charCodeAt(0) === 0xFEFF) {
       fileContent = fileContent.slice(1);
     }
     
     const lines = fileContent.split('\n').filter(line => line.trim());
-    
-    // 헤더 스킵하고 데이터 파싱
     const features = lines.slice(1).map(line => {
-      // CSV 파싱 개선: 따옴표 안의 쉼표 처리
       const columns = [];
       let current = '';
       let inQuotes = false;
@@ -57,7 +72,6 @@ function getFeaturesFromCSV(): Feature[] {
       return { No, Category, Feature, Value };
     }).filter(f => f.No && f.Category && f.Feature && f.No !== '');
     
-    console.log(`CSV에서 ${features.length}개 feature 로드됨`);
     return features;
   } catch (error) {
     console.error("CSV 파일 읽기 오류:", error);
@@ -65,7 +79,6 @@ function getFeaturesFromCSV(): Feature[] {
   }
 }
 
-// --- 헬퍼 함수: 유튜브 영상 ID 추출 ---
 function getYouTubeVideoId(url: string): string | null {
   if (!url) return null;
   const regex = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/;
@@ -73,11 +86,22 @@ function getYouTubeVideoId(url: string): string | null {
   return match ? match[1] : null;
 }
 
-// --- 개선된 프롬프트 생성 함수 ---
-function createAnalysisPrompt(videoData: any, features: Feature[], script: string) {
+// --- 향상된 전문가 페르소나 기반 프롬프트 ---
+function createExpertAnalysisPrompt(videoData: any, features: Feature[], scriptData: { text: string; language: string }) {
   const { snippet, statistics, contentDetails } = videoData;
   
-  // Feature를 카테고리별로 그룹화
+  // Duration을 초 단위로 변환
+  const getDurationInSeconds = (duration: string): number => {
+    if (!duration) return 0;
+    const match = duration.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+    if (!match) return 0;
+    const [, hours = '0', minutes = '0', seconds = '0'] = match;
+    return parseInt(hours) * 3600 + parseInt(minutes) * 60 + parseInt(seconds);
+  };
+
+  const durationSeconds = getDurationInSeconds(contentDetails.duration || '');
+  const isShortVideo = durationSeconds <= 60;
+
   const categorizedFeatures = features.reduce((acc, feature) => {
     if (!acc[feature.Category]) {
       acc[feature.Category] = [];
@@ -91,54 +115,108 @@ function createAnalysisPrompt(videoData: any, features: Feature[], script: strin
     .join('\n\n');
 
   return `
-다음 YouTube 광고 영상을 156가지 세부 특징으로 분석해주세요.
+# PERSONA: YouTube Video Analysis Expert
 
-=== 영상 정보 ===
-제목: ${snippet.title}
-설명: ${snippet.description?.substring(0, 800) || 'N/A'}
-조회수: ${statistics.viewCount || 'N/A'}
-좋아요: ${statistics.likeCount || 'N/A'}
-댓글수: ${statistics.commentCount || 'N/A'}
-길이: ${contentDetails.duration || 'N/A'}
-게시일: ${snippet.publishedAt || 'N/A'}
-채널: ${snippet.channelTitle || 'N/A'}
+You are a **YouTube Video Analysis Expert** and the user's content creation partner. Your core competency is analyzing ANY YouTube URL provided by the user, focusing intensively on the content to deliver comprehensive analysis reports and actionable insights.
 
-=== 스크립트/자막 ===
-${script.substring(0, 2000) || '스크립트 없음'}
+## CRITICAL ANALYSIS FRAMEWORK
 
-=== 분석할 특징들 ===
+### 1. IMMEDIATE VIDEO ASSESSMENT
+**Video Type:** ${isShortVideo ? 'SHORT VIDEO (≤60 seconds)' : 'STANDARD VIDEO (>60 seconds)'}
+**Duration:** ${durationSeconds} seconds
+**Analysis Strategy:** ${isShortVideo ? 'INTENSIVE MICRO-ANALYSIS - Every frame counts, focus on rapid visual cues and immediate impressions' : 'COMPREHENSIVE ANALYSIS - Detailed examination of all elements'}
+
+### 2. VIDEO INFORMATION DATABASE
+- **Title:** ${snippet.title}
+- **Description:** ${snippet.description?.substring(0, 1000) || 'No description'}
+- **Views:** ${statistics.viewCount || 'N/A'}
+- **Likes:** ${statistics.likeCount || 'N/A'}
+- **Comments:** ${statistics.commentCount || 'N/A'}
+- **Channel:** ${snippet.channelTitle || 'N/A'}
+- **Published:** ${snippet.publishedAt || 'N/A'}
+- **Script Language:** ${scriptData.language}
+- **Script Content:** ${scriptData.text.substring(0, 2000) || 'No subtitles available'}
+
+### 3. SPECIALIZED ANALYSIS PROTOCOLS
+
+#### A. HUMAN ANALYSIS PROTOCOL (인물 분석)
+**MANDATORY STEPS:**
+1. **Gender Detection:** Scan for ANY human figures - even partial appearances, silhouettes, or brief moments
+2. **Age Assessment:** Look for facial features, body language, clothing style indicators
+3. **Physical Characteristics:** Hair, skin tone, facial structure, body type
+4. **Behavioral Analysis:** Gestures, posture, movement patterns, expressions
+5. **Interaction Patterns:** How many people, their relationships, positioning
+
+**FOR SHORT VIDEOS:** Focus on the FIRST CLEAR FRAME where humans appear. Even 1-2 seconds is enough for basic gender/age assessment.
+
+#### B. VISUAL ELEMENTS PROTOCOL
+**IMMEDIATE SCAN:**
+- **Opening 3 seconds:** What's the first impression? Colors, people, objects, setting
+- **Dominant elements:** What takes up most screen space?
+- **Color palette:** Primary and secondary colors
+- **Setting detection:** Indoor/outdoor, specific location types
+
+#### C. PRODUCT/BRAND PROTOCOL
+**SYSTEMATIC CHECK:**
+1. **Logo scanning:** Any brand logos, product names, or text overlays
+2. **Product placement:** Items being used, shown, or demonstrated  
+3. **Brand colors:** Consistent color schemes that might indicate branding
+4. **Call-to-action elements:** Text, buttons, or verbal prompts
+
+### 4. ANALYSIS FEATURES TO COMPLETE
 ${featuresText}
 
-=== 분석 지침 ===
-1. 각 특징에 대해 구체적이고 정확한 값을 제공하세요
-2. "N/A", "판단불가", "분석불가" 등은 정말 불가능한 경우에만 사용하세요
-3. 추정이나 예측이 가능한 경우 "추정 [값]" 형태로 답변하세요
-4. 색상, 수량, 감정 등은 구체적으로 명시하세요
-5. 존재 여부는 "있음/없음" 또는 "예/아니오"로 답변하세요
+### 5. RESPONSE GENERATION RULES
 
-다음 JSON 형식으로만 응답하세요:
+#### CRITICAL INSTRUCTIONS:
+1. **NO LAZY ANALYSIS:** For obvious visual elements (like clear gender, age, colors, settings), provide specific answers
+2. **EVIDENCE-BASED:** If you can see it in typical video thumbnail or opening seconds, analyze it
+3. **SHORT VIDEO FOCUS:** For videos ≤60 seconds, prioritize immediate visual impact elements
+4. **FAILURE REASONS:** Only use "분석불가/reason" when truly impossible to determine from ANY visual or audio cues
+
+#### SPECIFIC ANSWER FORMATS:
+- **Gender:** "남성/여성/혼성" (not "분석불가" unless truly no humans visible)
+- **Age:** "20대/30대/추정 25세" (make educated guesses based on visual cues)
+- **Colors:** "빨간색/파란색/다색상" (specific color names)
+- **Setting:** "실내/실외/스튜디오/주방" (specific location types)
+- **Products:** "있음-[product type]/없음" (be specific about what you see)
+
+#### FAILURE CODES (Use sparingly):
+- "분석불가/인물없음" - Only when NO humans appear at all
+- "분석불가/화질불량" - Only for severely pixelated/blurry content
+- "분석불가/정보부족" - Only for completely ambiguous cases
+- "분석불가/시간부족" - Only for extremely brief glimpses
+
+### 6. QUALITY ASSURANCE CHECKLIST
+Before finalizing your analysis, verify:
+- [ ] Did I analyze obvious visual elements that anyone could see?
+- [ ] Did I provide specific values instead of generic "분석불가"?
+- [ ] For short videos, did I focus on immediate visual impact?
+- [ ] Did I use educated guesses based on visual context?
+- [ ] Are my "분석불가" responses truly justified?
+
+## RESPONSE FORMAT
+Provide your analysis in JSON format with exactly these keys:
+
 {
-  "feature_1": "분석된 값",
-  "feature_2": "분석된 값",
+  "feature_1": "specific analyzed value or 분석불가/specific reason",
+  "feature_2": "specific analyzed value or 분석불가/specific reason",
   ...
-  "feature_156": "분석된 값"
+  "feature_156": "specific analyzed value or 분석불가/specific reason"
 }
 
-각 feature_숫자는 위 특징 목록의 번호와 정확히 일치해야 합니다.
+**REMEMBER:** You are an expert analyst. Even a 15-second commercial should provide enough visual information for most human, clothing, setting, and product features. Be confident in your visual assessment abilities.
 `;
 }
 
-// --- JSON 응답 파싱 개선 함수 ---
-function parseGeminiResponse(text: string): any {
-  console.log('Gemini 원본 응답:', text.substring(0, 500) + '...');
+// --- JSON 파싱 및 검증 ---
+function parseAndValidateResponse(text: string, features: Feature[]): any {
+  console.log('Gemini 응답 첫 500자:', text.substring(0, 500));
   
   let jsonString = text.trim();
-  
-  // 마크다운 코드 블록 제거
   jsonString = jsonString.replace(/```json\s*|\s*```/g, '');
   jsonString = jsonString.replace(/```\s*|\s*```/g, '');
   
-  // JSON 객체 찾기
   const jsonMatch = jsonString.match(/\{[\s\S]*\}/);
   if (!jsonMatch) {
     throw new Error('JSON 형식을 찾을 수 없습니다');
@@ -146,7 +224,33 @@ function parseGeminiResponse(text: string): any {
   
   try {
     const parsed = JSON.parse(jsonMatch[0]);
-    console.log('파싱된 feature 개수:', Object.keys(parsed).length);
+    
+    // 156개 feature가 모두 있는지 검증
+    const expectedKeys = features.map(f => `feature_${f.No}`);
+    const actualKeys = Object.keys(parsed);
+    const missingKeys = expectedKeys.filter(key => !actualKeys.includes(key));
+    
+    if (missingKeys.length > 0) {
+      console.warn(`누락된 features: ${missingKeys.length}개`);
+      // 누락된 키들을 기본값으로 채우기
+      missingKeys.forEach(key => {
+        parsed[key] = '분석불가/AI응답누락';
+      });
+    }
+    
+    // 너무 많은 "분석불가" 응답 체크
+    const analysisFailureCount = Object.values(parsed).filter(value => 
+      String(value).startsWith('분석불가/') || String(value).startsWith('판단불가/')
+    ).length;
+    
+    const failureRate = (analysisFailureCount / Object.keys(parsed).length) * 100;
+    console.log(`분석실패율: ${failureRate.toFixed(1)}% (${analysisFailureCount}/156)`);
+    
+    if (failureRate > 70) {
+      console.warn('분석실패율이 너무 높음. 재시도 필요할 수 있음.');
+    }
+    
+    console.log(`파싱 완료: ${Object.keys(parsed).length}개 features`);
     return parsed;
   } catch (e) {
     console.error('JSON 파싱 실패:', e);
@@ -154,46 +258,46 @@ function parseGeminiResponse(text: string): any {
   }
 }
 
-// --- 기본값 채우기 함수 ---
-function fillDefaultValues(analysis: any, features: Feature[], videoData: any): any {
+// --- YouTube 메타데이터 기반 초기값 설정 ---
+function setYouTubeMetadata(analysis: any, features: Feature[], videoData: any): any {
   const { snippet, statistics, contentDetails } = videoData;
   const result = { ...analysis };
   
   features.forEach(feature => {
     const featureKey = `feature_${feature.No}`;
     
-    // 이미 값이 있으면 스킵
-    if (result[featureKey] && result[featureKey] !== 'N/A') {
-      return;
-    }
-    
-    // YouTube 메타데이터에서 직접 추출 가능한 것들
     switch (feature.Feature) {
       case '전체 영상 길이':
-        result[featureKey] = contentDetails.duration || 'N/A';
+        if (contentDetails.duration) {
+          result[featureKey] = contentDetails.duration;
+        }
         break;
       case '조회수':
-        result[featureKey] = statistics.viewCount || '0';
+        if (statistics.viewCount) {
+          result[featureKey] = statistics.viewCount;
+        }
         break;
       case '좋아요 수':
-        result[featureKey] = statistics.likeCount || '0';
+        if (statistics.likeCount) {
+          result[featureKey] = statistics.likeCount;
+        }
         break;
       case '채널명':
-        result[featureKey] = snippet.channelTitle || 'N/A';
+        if (snippet.channelTitle) {
+          result[featureKey] = snippet.channelTitle;
+        }
         break;
       case '영상 제목':
-        result[featureKey] = snippet.title || 'N/A';
+        if (snippet.title) {
+          result[featureKey] = snippet.title;
+        }
         break;
       case '영상 설명':
         result[featureKey] = snippet.description ? '있음' : '없음';
         break;
       case '게시일':
-        result[featureKey] = snippet.publishedAt ? new Date(snippet.publishedAt).toLocaleDateString() : 'N/A';
-        break;
-      default:
-        // 카테고리별 기본값
-        if (!result[featureKey] || result[featureKey] === 'N/A') {
-          result[featureKey] = getDefaultForCategory(feature.Category);
+        if (snippet.publishedAt) {
+          result[featureKey] = new Date(snippet.publishedAt).toLocaleDateString();
         }
         break;
     }
@@ -202,29 +306,42 @@ function fillDefaultValues(analysis: any, features: Feature[], videoData: any): 
   return result;
 }
 
-function getDefaultForCategory(category: string): string {
-  const defaults: Record<string, string> = {
-    '인물 분석': '미확인',
-    '의상 분석': '미확인',
-    '배경 분석': '미확인',
-    '제품 분석': '없음',
-    '연출/편집 분석': '일반',
-    '사운드 분석': '있음',
-    '텍스트/자막 분석': '없음',
-    '스토리 구조 분석': '일반',
-    '유튜브 성과 분석': '미분석',
-    '종합 분석': '미분류'
+// --- 분석 완료도 계산 ---
+function calculateCompletionStats(analysis: any): { completed: number; incomplete: number; total: number; percentage: number } {
+  const total = Object.keys(analysis).length;
+  let completed = 0;
+  let incomplete = 0;
+  
+  Object.values(analysis).forEach(value => {
+    const strValue = String(value);
+    if (strValue === 'N/A' || 
+        strValue === '미확인' || 
+        strValue.startsWith('분석불가/') || 
+        strValue.startsWith('판단불가/') || 
+        strValue === '' || 
+        strValue === '0' && strValue.includes('수')) {
+      incomplete++;
+    } else {
+      completed++;
+    }
+  });
+  
+  return {
+    completed,
+    incomplete,
+    total,
+    percentage: Math.round((completed / total) * 100)
   };
-  return defaults[category] || 'N/A';
 }
 
-// --- 메인 분석 함수 ---
+// --- 재시도 로직이 추가된 분석 함수 ---
 async function analyzeSingleVideo(video: VideoInput, features: Feature[], youtube: any, model: any): Promise<any> {
   const videoId = getYouTubeVideoId(video.url);
   if (!videoId) throw new Error(`'${video.url}'은(는) 잘못된 YouTube URL입니다.`);
 
   console.log(`영상 분석 시작: ${video.title} (ID: ${videoId})`);
 
+  // YouTube 데이터 가져오기
   const response = await youtube.videos.list({
     part: ['snippet', 'statistics', 'contentDetails'],
     id: [videoId],
@@ -235,83 +352,83 @@ async function analyzeSingleVideo(video: VideoInput, features: Feature[], youtub
   }
 
   const videoData = response.data.items[0];
-  const snippet = videoData.snippet;
-  const statistics = videoData.statistics;
-  const contentDetails = videoData.contentDetails;
+  
+  // 다국어 자막 추출
+  const scriptData = await extractSubtitles(videoId);
 
-  // 자막 추출
-  let script = '';
-  try {
-    const subtitles = await getSubtitles({ videoID: videoId, lang: 'ko' });
-    script = subtitles.map(sub => sub.text).join(' ');
-    console.log('한국어 자막 추출 성공');
-  } catch (e) {
+  // 향상된 프롬프트로 Gemini 분석
+  const maxRetries = 2;
+  let bestAnalysis = null;
+  let bestCompletionRate = 0;
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      const subtitles = await getSubtitles({ videoID: videoId, lang: 'en' });
-      script = subtitles.map(sub => sub.text).join(' ');
-      console.log('영어 자막 추출 성공');
-    } catch (e2) {
-      script = "자막을 추출할 수 없습니다.";
-      console.log('자막 추출 실패');
+      const prompt = createExpertAnalysisPrompt(videoData, features, scriptData);
+      
+      console.log(`분석 시도 ${attempt}/${maxRetries}: ${video.title}`);
+      
+      const result = await model.generateContent(prompt);
+      const resultResponse = await result.response;
+      const text = resultResponse.text();
+      
+      let analysisResult = parseAndValidateResponse(text, features);
+      analysisResult = setYouTubeMetadata(analysisResult, features, videoData);
+      
+      // 완료도 계산
+      const stats = calculateCompletionStats(analysisResult);
+      console.log(`시도 ${attempt} 완료율: ${stats.percentage}%`);
+      
+      // 더 좋은 결과면 저장
+      if (stats.percentage > bestCompletionRate) {
+        bestCompletionRate = stats.percentage;
+        bestAnalysis = { analysisResult, stats };
+      }
+      
+      // 80% 이상이면 만족
+      if (stats.percentage >= 80) {
+        console.log(`높은 완료율 달성 (${stats.percentage}%), 분석 종료`);
+        break;
+      }
+      
+    } catch (e: any) {
+      console.error(`분석 시도 ${attempt} 실패:`, e.message);
+      if (attempt === maxRetries) {
+        throw new Error(`모든 분석 시도 실패: ${e.message}`);
+      }
+    }
+    
+    // 재시도 전 잠시 대기
+    if (attempt < maxRetries) {
+      await new Promise(resolve => setTimeout(resolve, 2000));
     }
   }
 
-  // Gemini 분석 요청
-  const prompt = createAnalysisPrompt(videoData, features, script);
-  console.log('Gemini 분석 요청 중...');
-
-  try {
-    const result = await model.generateContent(prompt);
-    const resultResponse = await result.response;
-    const text = resultResponse.text();
-    
-    const analysisResult = parseGeminiResponse(text);
-    const finalResult = fillDefaultValues(analysisResult, features, videoData);
-    
-    // 결과를 카테고리별로 정리
-    const categorizedAnalysis: { [category: string]: { [feature: string]: string } } = {};
-    features.forEach(feature => {
-      const featureKey = `feature_${feature.No}`;
-      const value = finalResult[featureKey] || 'N/A';
-      
-      if (!categorizedAnalysis[feature.Category]) {
-        categorizedAnalysis[feature.Category] = {};
-      }
-      categorizedAnalysis[feature.Category][feature.Feature] = value;
-    });
-
-    console.log(`영상 분석 완료: ${video.title}`);
-    return { 
-      ...video, 
-      id: videoId, 
-      status: 'completed', 
-      analysis: categorizedAnalysis 
-    };
-
-  } catch (e: any) {
-    console.error('Gemini 분석 실패:', e.message);
-    
-    // 실패 시 기본값으로만 채우기
-    const defaultAnalysis = fillDefaultValues({}, features, videoData);
-    const categorizedAnalysis: { [category: string]: { [feature: string]: string } } = {};
-    
-    features.forEach(feature => {
-      const featureKey = `feature_${feature.No}`;
-      const value = defaultAnalysis[featureKey] || 'N/A';
-      
-      if (!categorizedAnalysis[feature.Category]) {
-        categorizedAnalysis[feature.Category] = {};
-      }
-      categorizedAnalysis[feature.Category][feature.Feature] = value;
-    });
-
-    return { 
-      ...video, 
-      id: videoId, 
-      status: 'completed', 
-      analysis: categorizedAnalysis 
-    };
+  if (!bestAnalysis) {
+    throw new Error('분석 결과를 얻을 수 없습니다');
   }
+
+  // 카테고리별 정리
+  const categorizedAnalysis: { [category: string]: { [feature: string]: string } } = {};
+  features.forEach(feature => {
+    const featureKey = `feature_${feature.No}`;
+    const value = bestAnalysis.analysisResult[featureKey] || '분석불가/AI처리오류';
+    
+    if (!categorizedAnalysis[feature.Category]) {
+      categorizedAnalysis[feature.Category] = {};
+    }
+    categorizedAnalysis[feature.Category][feature.Feature] = value;
+  });
+
+  console.log(`영상 분석 완료: ${video.title} - 최종 완료도 ${bestCompletionRate}% (${bestAnalysis.stats.completed}/${bestAnalysis.stats.total})`);
+  
+  return { 
+    ...video, 
+    id: videoId, 
+    status: 'completed', 
+    analysis: categorizedAnalysis,
+    completionStats: bestAnalysis.stats,
+    scriptLanguage: scriptData.language
+  };
 }
 
 // --- API 라우트 핸들러 ---
@@ -324,14 +441,10 @@ export async function POST(req: NextRequest) {
   }
   
   try {
-    const youtube = google.youtube({
-      version: 'v3',
-      auth: YOUTUBE_API_KEY
-    });
-    
+    const youtube = google.youtube({ version: 'v3', auth: YOUTUBE_API_KEY });
     const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
     const model = genAI.getGenerativeModel({ 
-      model: "gemini-1.5-flash",
+      model: "gemini-2.5-flash",
       safetySettings: [
         { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
         { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
@@ -348,9 +461,8 @@ export async function POST(req: NextRequest) {
     }
 
     const features = getFeaturesFromCSV();
-    console.log(`총 ${features.length}개의 feature 로드됨`);
+    console.log(`분석 시작: ${videos.length}개 영상, ${features.length}개 features`);
 
-    // 순차적으로 분석 (동시성 문제 방지)
     const results = [];
     for (let i = 0; i < videos.length; i++) {
       const video = videos[i];
@@ -372,19 +484,22 @@ export async function POST(req: NextRequest) {
         });
       }
       
-      // API 호출 간 잠시 대기 (rate limit 방지)
+      // API 제한 방지를 위한 대기
       if (i < videos.length - 1) {
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        await new Promise(resolve => setTimeout(resolve, 4000)); // 4초로 증가
       }
     }
 
-    console.log(`전체 분석 완료. 성공: ${results.filter(r => r.status === 'fulfilled').length}, 실패: ${results.filter(r => r.status === 'rejected').length}`);
+    const successCount = results.filter(r => r.status === 'fulfilled').length;
+    const failCount = results.filter(r => r.status === 'rejected').length;
     
+    console.log(`전체 분석 완료. 성공: ${successCount}개, 실패: ${failCount}개`);
     return NextResponse.json({ results });
 
   } catch (error: any) {
     console.error("API Route Error:", error);
-    const errorMessage = error instanceof Error ? error.message : '서버 내부 오류가 발생했습니다.';
-    return NextResponse.json({ message: errorMessage }, { status: 500 });
+    return NextResponse.json({ 
+      message: error instanceof Error ? error.message : '서버 내부 오류가 발생했습니다.' 
+    }, { status: 500 });
   }
 }
