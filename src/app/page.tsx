@@ -8,6 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Loader2, AlertCircle, CheckCircle, Download, Plus, Trash2, BarChart3 } from "lucide-react";
+import AutomationPanel from '@/components/AutomationPanel';
 import toast from 'react-hot-toast';
 
 // z+ 세션 보존: 일괄/개별 내보내기 컴포넌트는 그대로 유지
