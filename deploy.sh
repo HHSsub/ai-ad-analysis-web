@@ -1,49 +1,29 @@
 #!/bin/bash
 
-# YouTube 영상 분석기 Vercel 배포 스크립트
+echo "🚀 YouTube 광고 분석 웹 배포 시작..."
 
-echo "🚀 YouTube 영상 분석기 배포 시작..."
+# 프로젝트 디렉토리로 이동
+cd ~/projects/ai-ad-analysis-web
 
-# 1. 의존성 설치 확인
-echo "📦 의존성 설치 중..."
+# Git에서 최신 코드 가져오기
+git pull origin main
+
+# 의존성 설치
 npm install
 
-# 2. 환경변수 확인
-if [ ! -f ".env.local" ]; then
-  echo "⚠️  .env.local 파일이 없습니다. .env.example을 복사하여 생성하세요."
-  cp .env.example .env.local
-  echo "✅ .env.local 파일을 생성했습니다. API 키를 설정해주세요."
-fi
-
-# 3. 빌드 테스트
-echo "🔨 빌드 테스트 중..."
+# 빌드
 npm run build
 
-if [ $? -eq 0 ]; then
-  echo "✅ 빌드 성공"
-else
-  echo "❌ 빌드 실패 - 배포를 중단합니다."
-  exit 1
-fi
+# PM2로 서비스 재시작
+pm2 restart api-server || pm2 start npm --name "api-server" -- run start:api
 
-# 4. Vercel CLI 설치 확인
-if ! command -v vercel &> /dev/null; then
-  echo "📥 Vercel CLI 설치 중..."
-  npm install -g vercel
-fi
+# Python 스크립트들을 별도 서비스로 실행
+pm2 restart youtube-collector || pm2 start python3 --name "youtube-collector" -- youtube_ads_collector_with_db.py
+pm2 restart web-connector || pm2 start python3 --name "web-connector" -- web_service_connector.py
 
-# 5. Vercel 배포
-echo "🌐 Vercel 배포 중..."
-vercel --prod
+# PM2 상태 확인
+pm2 status
 
-# 6. 환경변수 설정 안내
-echo ""
-echo "🔧 배포 후 필수 설정:"
-echo "1. Vercel 대시보드에서 환경변수 설정:"
-echo "   - YOUTUBE_API_KEY: [귀하의 YouTube API 키]"
-echo "   - GEMINI_API_KEY: [귀하의 Gemini API 키]"
-echo ""
-echo "2. 환경변수 설정 후 재배포:"
-echo "   vercel --prod"
-echo ""
 echo "✅ 배포 완료!"
+echo "🌐 웹 서비스: http://16.171.199.44:3000"
+echo "📊 PM2 모니터링: pm2 monit"
