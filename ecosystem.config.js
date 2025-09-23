@@ -19,7 +19,7 @@ module.exports = {
     },
     {
       name: 'youtube-collector',
-      script: 'python3',
+      script: './venv/bin/python',
       args: 'youtube_ads_collector_with_db.py',
       instances: 1,
       exec_mode: 'fork',
@@ -32,7 +32,7 @@ module.exports = {
     },
     {
       name: 'web-connector',
-      script: 'python3',
+      script: './venv/bin/python',
       args: 'web_service_connector.py',
       instances: 1,
       exec_mode: 'fork',
