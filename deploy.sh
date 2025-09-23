@@ -18,8 +18,8 @@ npm run build
 pm2 restart api-server || pm2 start npm --name "api-server" -- run start:api
 
 # Python 스크립트들을 별도 서비스로 실행
-pm2 restart youtube-collector || pm2 start python3 --name "youtube-collector" -- youtube_ads_collector_with_db.py
-pm2 restart web-connector || pm2 start python3 --name "web-connector" -- web_service_connector.py
+pm2 restart youtube-collector || pm2 start ./venv/bin/python --name "youtube-collector" -- youtube_ads_collector_with_db.py
+pm2 restart web-connector || pm2 start ./venv/bin/python --name "web-connector" -- web_service_connector.py
 
 # PM2 상태 확인
 pm2 status
