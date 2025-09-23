@@ -156,4 +156,3 @@ export class AutomationScheduler {
 
 // 전역 스케줄러 인스턴스
 export const globalScheduler = new AutomationScheduler();
-    
