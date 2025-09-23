@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Loader2, AlertCircle, CheckCircle, Download, Plus, Trash2, BarChart3 } from "lucide-react";
+import { Loader2, AlertCircle, CheckCircle, Download, Plus, Trash2, BarChart3, Play } from "lucide-react";
 import AutomationPanel from '@/components/AutomationPanel';
 import toast from 'react-hot-toast';
 
@@ -63,6 +63,7 @@ export default function Home() {
   const [results, setResults] = useState<AnalysisResult[]>([]);
   const [selectedVideo, setSelectedVideo] = useState<AnalysisResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [showAutomation, setShowAutomation] = useState(false);
 
   const completedVideos = results.filter((r): r is FulfilledResult => r.status === 'fulfilled');
   const failedVideos = results.filter((r): r is RejectedResult => r.status === 'rejected');
@@ -434,10 +435,12 @@ export default function Home() {
         {analysisStatus === 'welcome' && (
           <div className="space-x-3">
             <Button 
-              disabled 
-              className="bg-gray-300 text-gray-500 cursor-not-allowed"
+              onClick={() => setShowAutomation(!showAutomation)}
+              variant={showAutomation ? "default" : "outline"}
+              className={showAutomation ? "bg-green-600 hover:bg-green-700 text-white" : ""}
             >
-              수집 자동화 (개발중)
+              <Play className="mr-2 h-4 w-4" />
+              수집 자동화
             </Button>
             <Button 
               variant="default" 
@@ -450,8 +453,12 @@ export default function Home() {
         )}
       </div>
 
-      {/* AutomationPanel 추가 위치 */}
-      <AutomationPanel />
+      {/* AutomationPanel - 조건부 렌더링 */}
+      {showAutomation && (
+        <div className="mb-8">
+          <AutomationPanel />
+        </div>
+      )}
 
       {analysisStatus === 'input' && (
         <>
@@ -551,6 +558,7 @@ export default function Home() {
           <p className="mt-6 text-xl text-gray-700 font-medium">영상 데이터를 분석 중입니다. 잠시만 기다려주세요...</p>
           <p className="mt-2 text-sm text-gray-500">156가지 피처를 상세히 분석하고 있습니다.</p>
           <p className="mt-1 text-sm text-gray-500">다국어 영상도 지원됩니다.</p>
+          <p className="mt-2 text-sm text-green-600 font-medium">✅ 분석 완료시 자동으로 Google Drive에 업로드됩니다!</p>
         </div>
       )}
 
@@ -577,7 +585,7 @@ export default function Home() {
                     {completedVideos.map(item => (
                       <li 
                         key={item.value.id} 
-                        onClick={() => setSelectedVideo(item)} 
+onClick={() => setSelectedVideo(item)} 
                         className={`p-3 rounded-lg cursor-pointer transition-all ${
                           selectedVideo?.value?.id === item.value.id 
                             ? 'bg-blue-100 text-blue-800 border-2 border-blue-200' 
@@ -602,6 +610,10 @@ export default function Home() {
                             언어: {item.value.scriptLanguage}
                           </div>
                         )}
+                        <div className="text-xs text-green-600 mt-1 flex items-center">
+                          <CheckCircle className="h-3 w-3 mr-1" />
+                          Drive 자동 업로드 완료
+                        </div>
                       </li>
                     ))}
                   </ul>
@@ -668,11 +680,21 @@ export default function Home() {
           <Button 
             onClick={() => setAnalysisStatus('input')} 
             size="lg"
-            className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-8 py-3 text-lg transition-colors shadow-lg"
+            className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-8 py-3 text-lg transition-colors shadow-lg mr-4"
           >
-            분석 시작하기
+            링크 수동 추가
+          </Button>
+          <Button 
+            onClick={() => setShowAutomation(!showAutomation)}
+            size="lg" 
+            variant="outline"
+            className="border-green-600 text-green-600 hover:bg-green-50 font-semibold px-8 py-3 text-lg transition-colors shadow-lg"
+          >
+            <Play className="mr-2 h-5 w-5" />
+            수집 자동화
           </Button>
           <p className="text-sm text-gray-500 mt-4">한국어, 영어, 일본어, 중국어 등 다국어 영상 지원</p>
+          <p className="text-sm text-green-600 mt-2 font-medium">✅ 분석 완료시 Google Drive에 자동 업로드</p>
         </div>
       )}
     </main>
