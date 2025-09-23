@@ -24,44 +24,61 @@ export default function AutomationPanel() {
     return () => clearInterval(interval);
   }, []);
 
-  const fetchStatus = async () => {
-    try {
-      const response = await fetch('/api/automation', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'status' })
-      });
-      
-      const result = await response.json();
-      if (result.success) {
-        setStats(result.data);
+    // fetchStatus 함수도 업데이트
+    const fetchStatus = async () => {
+      try {
+        const response = await fetch('/api/automation/collect', {
+          method: 'GET'
+        });
+        
+        const result = await response.json();
+        if (result.success && result.data?.stats) {
+          setStats(result.data.stats);
+        }
+      } catch (error) {
+        console.error('Status fetch failed:', error);
       }
-    } catch (error) {
-      console.error('Status fetch failed:', error);
-    }
-  };
+    };
+        
 
   const handleCollectAds = async () => {
     setIsCollecting(true);
-    toast.loading('광고 수집 중...', { id: 'collect' });
+    toast.loading('Python 광고 수집기 실행 중...', { id: 'collect' });
     
     try {
-      const response = await fetch('/api/automation', {
+      const response = await fetch('/api/automation/collect', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'collect', batchSize: 20 })
+        body: JSON.stringify({ 
+          maxAds: 25,
+          searchQueries: [
+            "advertisement commercial",
+            "product promotion", 
+            "brand commercial",
+            "sponsored content"
+          ]
+        })
       });
       
       const result = await response.json();
       
       if (result.success) {
         toast.success(result.message, { id: 'collect' });
-        fetchStatus();
+        
+        // 상태 즉시 업데이트
+        if (result.data?.stats) {
+          setStats(result.data.stats);
+        }
+        
+        // 전체 상태 재조회
+        await fetchStatus();
       } else {
-        toast.error('수집 실패', { id: 'collect' });
+        toast.error(`수집 실패: ${result.message}`, { id: 'collect' });
+        console.error('수집 에러:', result.error);
       }
     } catch (error) {
-      toast.error('수집 중 오류 발생', { id: 'collect' });
+      toast.error('수집 중 네트워크 오류 발생', { id: 'collect' });
+      console.error('네트워크 에러:', error);
     } finally {
       setIsCollecting(false);
     }
