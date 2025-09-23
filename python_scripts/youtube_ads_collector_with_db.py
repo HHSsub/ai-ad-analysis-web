@@ -294,9 +294,9 @@ def main():
     
     if not apify_token and not serp_api_key:
         print("🔑 API 키를 입력하세요:")
-        apify_token = input("Apify Token (Enter 시 건너뛰기): ").strip() or None
-        serp_api_key = input("SerpAPI Key (Enter 시 건너뛰기): ").strip() or None
-        
+        # apify_token = input("Apify Token (Enter 시 건너뛰기): ").strip() or None
+        # serp_api_key = input("SerpAPI Key (Enter 시 건너뛰기): ").strip() or None
+        serp_api_key =  646e6386e54a3e331122aa9460166830bcdbd35c89283b857dcf66901e11db2a
         if not apify_token and not serp_api_key:
             logger.error("최소 하나의 API 키가 필요합니다!")
             return
@@ -363,4 +363,5 @@ def main():
         logger.error(f"실행 중 오류 발생: {e}")
 
 if __name__ == "__main__":
+
     main()
