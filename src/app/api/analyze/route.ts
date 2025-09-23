@@ -10,6 +10,7 @@ import fs from 'fs';
 import { callGeminiWithTransientRetry } from '@/lib/ai/gemini-rate-limit';
 import { getSubtitlesWithFallback } from '@/lib/youtube/subtitle-fallback';
 import { getThumbnailUrls, fetchInlineImageParts } from '@/lib/youtube/thumbnails';
+import { globalDriveUploader } from '@/lib/google-drive';
 
 // --- 타입 정의 ---
 interface VideoInput {
@@ -483,8 +484,7 @@ async function analyzeSingleVideo(video: VideoInput, features: Feature[], youtub
     }
     categorizedAnalysis[feature.Category][feature.Feature] = value;
   });
-
-  console.log(`영상 분석 완료: ${video.title} - 최종 완료도 ${bestCompletionRate}% (${bestAnalysis.stats.completed}/${bestAnalysis.stats.total})`);
+    console.log(`영상 분석 완료: ${video.title} - 최종 완료도 ${bestCompletionRate}% (${bestAnalysis.stats.completed}/${bestAnalysis.stats.total})`);
   
   return { 
     ...video, 
@@ -536,6 +536,27 @@ export async function POST(req: NextRequest) {
       try {
         const result = await analyzeSingleVideo(video, features, youtube, model);
         results.push({ status: 'fulfilled', value: result });
+        
+        // ✅ 분석 성공시 즉시 Google Drive에 업로드
+        try {
+          console.log(`🚀 Google Drive 즉시 업로드 시작: ${result.title}`);
+          const uploadResult = await globalDriveUploader.uploadImmediately(result);
+          
+          if (uploadResult.success) {
+            console.log(`✅ Drive 업로드 성공: ${result.title}`);
+            if (uploadResult.overwritten) {
+              console.log(`🔄 기존 파일 덮어쓰기 완료: ${result.title}`);
+            }
+            if (uploadResult.webViewLink) {
+              console.log(`🔗 Drive 링크: ${uploadResult.webViewLink}`);
+            }
+          } else {
+            console.error(`❌ Drive 업로드 실패: ${result.title}`);
+          }
+        } catch (driveError: any) {
+          console.error(`❌ Drive 업로드 중 예외 발생: ${result.title}`, driveError.message);
+        }
+        
       } catch (error: any) {
         console.error(`영상 분석 실패: ${video.title}`, error.message);
         results.push({ 
