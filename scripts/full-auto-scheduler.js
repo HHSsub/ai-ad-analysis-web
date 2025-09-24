@@ -1,6 +1,7 @@
 const cron = require('node-cron');
 const { spawn, execSync } = require('child_process');
 const path = require('path');
+const axios = require('axios');
 require('dotenv').config({ path: '.env.local' });
 
 // 실제 DB 경로 (프로젝트 루트에 있음)
@@ -20,14 +21,24 @@ async function collectYouTubeAds() {
     const pythonScript = path.join(process.cwd(), 'python_scripts', 'youtube_ads_collector_with_db.py');
     const venvPython = path.join(process.cwd(), 'venv', 'bin', 'python');
     
-    const env = {
-      ...process.env,
-      MAX_ADS_PER_QUERY: '30',
-      AUTO_MODE: 'true',
-      SERPAPI_KEY: process.env.SERPAPI_KEY || '646e6386e54a3e331122aa9460166830bcdbd35c89283b857dcf66901e11db2a'
-    };
+    // Python 래퍼 스크립트 생성
+    const wrapperScript = path.join(process.cwd(), 'python_scripts', 'auto_wrapper.py');
+    const wrapperContent = `
+import os
+os.environ['MAX_ADS_PER_QUERY'] = '30'
+os.environ['AUTO_MODE'] = 'true'
+os.environ['SERPAPI_KEY'] = os.environ.get('SERPAPI_KEY', '646e6386e54a3e331122aa9460166830bcdbd35c89283b857dcf66901e11db2a')
+
+import youtube_ads_collector_with_db
+youtube_ads_collector_with_db.main()
+`;
     
-    const pythonProcess = spawn(venvPython, [pythonScript], { env });
+    require('fs').writeFileSync(wrapperScript, wrapperContent);
+    
+    const pythonProcess = spawn(venvPython, [wrapperScript], {
+      cwd: process.cwd(),
+      env: process.env
+    });
     
     let collected = 0;
     
@@ -43,6 +54,10 @@ async function collectYouTubeAds() {
           collected = result.new_ads || 0;
         } catch (e) {}
       }
+    });
+    
+    pythonProcess.stderr.on('data', (data) => {
+      console.error('[Python Error]', data.toString());
     });
     
     pythonProcess.on('close', (code) => {
@@ -85,20 +100,20 @@ async function analyzePendingAds() {
       try {
         log(`[${i+1}/${pendingAds.length}] 분석 중: ${ad.title}`);
         
-        const axios = require('axios');
         const response = await axios.post(`${API_URL}/api/analyze`, {
           videos: [{
             id: `auto_${Date.now()}_${i}`,
             title: ad.title,
             url: ad.url,
-            note: ad.note
+            note: ad.note || '자동 수집됨'
           }]
         });
         
         if (response.data.success) {
           analyzed++;
-          // DB 상태 업데이트
-          execSync(`sqlite3 "${DB_PATH}" "UPDATE youtube_ads SET analysis_status = 'completed' WHERE url = '${ad.url}'"`);
+          // DB 상태 업데이트 (SQL injection 방지)
+          const updateQuery = `UPDATE youtube_ads SET analysis_status = 'completed', analyzed_at = datetime('now') WHERE url = ?`;
+          execSync(`sqlite3 "${DB_PATH}" "${updateQuery}" "${ad.url}"`);
         } else {
           failed++;
         }
@@ -106,7 +121,8 @@ async function analyzePendingAds() {
       } catch (error) {
         log(`분석 실패: ${error.message}`, 'ERROR');
         failed++;
-        execSync(`sqlite3 "${DB_PATH}" "UPDATE youtube_ads SET analysis_status = 'failed' WHERE url = '${ad.url}'"`);
+        const updateQuery = `UPDATE youtube_ads SET analysis_status = 'failed' WHERE url = ?`;
+        execSync(`sqlite3 "${DB_PATH}" "${updateQuery}" "${ad.url}"`);
       }
       
       // API Rate Limit 대응 (5초 대기)
@@ -124,7 +140,6 @@ async function analyzePendingAds() {
 // Step 3: Google Drive 업로드
 async function uploadResults() {
   try {
-    const axios = require('axios');
     const timestamp = new Date().toISOString().split('T')[0];
     
     // 완료된 분석 결과 가져오기
@@ -200,7 +215,9 @@ async function main() {
   });
   
   // 시작시 한번 실행
-  runFullWorkflow();
+  runFullWorkflow().catch(err => {
+    log(`초기 실행 실패: ${err.message}`, 'ERROR');
+  });
 }
 
 main().catch(error => {
