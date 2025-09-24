@@ -18,7 +18,8 @@ async function collectYouTubeAds() {
   return new Promise((resolve, reject) => {
     log('YouTube 광고 수집 시작...');
     
-    const pythonScript = path.join(process.cwd(), 'python_scripts', 'youtube_ads_collector_with_db.py');
+    // collectYouTubeAds 함수 수정 부분만
+    const pythonScript = path.join(process.cwd(), 'python_scripts', 'youtube_ads_collector_auto_wrapper.py');
     const venvPython = path.join(process.cwd(), 'venv', 'bin', 'python');
     
     // Python 래퍼 스크립트 생성
