@@ -389,7 +389,7 @@ async function analyzeSingleVideo(video: VideoInput, features: Feature[], youtub
         })
       );
 
-      const resultResponse = await result.response;
+      const resultResponse = await (result as any).response;
       const text = resultResponse.text();
       
       let analysisResult = parseAndValidateResponse(text, features);
