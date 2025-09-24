@@ -1,10 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   experimental: {
-    // Next.js 14에서 serverActions는 기본으로 활성화됨 - 제거
-    // serverActions 관련 설정 제거
+    // Next.js 14에서는 serverActions가 기본으로 활성화됨
   },
-  // Next.js 14에서 api 설정이 제거됨 - 대신 다른 방법 사용
   images: {
     domains: ['i.ytimg.com', 'img.youtube.com'],
     unoptimized: true
@@ -31,12 +29,16 @@ const nextConfig = {
   },
   // 빌드 최적화
   typescript: {
-    // 빌드 시 타입 체크 건너뛰기 (배포용)
+    // 타입 체크 유지하되 중요하지 않은 오류는 허용
     ignoreBuildErrors: false,
   },
   eslint: {
-    // 빌드 시 ESLint 건너뛰기 (배포용)
+    // ESLint 체크 유지
     ignoreDuringBuilds: false,
+  },
+  // API 응답 시간 제한 증가
+  serverRuntimeConfig: {
+    maxDuration: 300
   },
 };
 
