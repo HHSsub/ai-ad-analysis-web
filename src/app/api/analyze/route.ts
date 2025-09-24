@@ -60,42 +60,99 @@ async function extractSubtitles(videoId: string): Promise<{ text: string; langua
 }
 
 // --- CSV 파싱 함수 ---
+
+// --- CSV 파싱 함수 (에러 방지 강화) ---
 function getFeaturesFromCSV(): Feature[] {
   const filePath = path.join(process.cwd(), 'src', 'data', 'output_features.csv');
+  
   try {
+    // 파일 존재 여부 먼저 확인
+    if (!fs.existsSync(filePath)) {
+      throw new Error(`CSV 파일이 존재하지 않습니다: ${filePath}`);
+    }
+
     let fileContent = fs.readFileSync(filePath, 'utf-8');
     
+    // fileContent가 null이나 undefined인지 확인
+    if (!fileContent) {
+      throw new Error('CSV 파일 내용을 읽을 수 없습니다 (빈 파일이거나 권한 문제)');
+    }
+
+    // BOM 제거
     if (fileContent.charCodeAt(0) === 0xFEFF) {
       fileContent = fileContent.slice(1);
     }
     
-    const lines = fileContent.split('\n').filter(line => line.trim());
-    const features = lines.slice(1).map(line => {
-      const columns = [];
-      let current = '';
-      let inQuotes = false;
-      
-      for (let i = 0; i < line.length; i++) {
-        const char = line[i];
-        if (char === '"') {
-          inQuotes = !inQuotes;
-        } else if (char === ',' && !inQuotes) {
-          columns.push(current.trim());
-          current = '';
-        } else {
-          current += char;
-        }
-      }
-      columns.push(current.trim());
-      
-      const lines = fileContent.split('\n').filter(line => line.trim() && line.includes(','));
-      return { No, Category, Feature, Value };
-    }).filter(f => f.No && f.Category && f.Feature && f.No !== '');
+    // 파일 내용이 비어있는지 확인
+    if (fileContent.trim().length === 0) {
+      throw new Error('CSV 파일이 비어있습니다');
+    }
     
+    // 라인별로 분리하고 빈 라인 제거
+    const lines = fileContent.split('\n').filter(line => line.trim().length > 0);
+    
+    if (lines.length < 2) {
+      throw new Error('CSV 파일에 데이터가 없습니다 (헤더만 있거나 완전히 비어있음)');
+    }
+    
+    const features = lines.slice(1).map((line, index) => {
+      try {
+        const columns = [];
+        let current = '';
+        let inQuotes = false;
+        
+        for (let i = 0; i < line.length; i++) {
+          const char = line[i];
+          if (char === '"') {
+            inQuotes = !inQuotes;
+          } else if (char === ',' && !inQuotes) {
+            columns.push(current.trim());
+            current = '';
+          } else {
+            current += char;
+          }
+        }
+        columns.push(current.trim());
+        
+        // 최소 4개 열이 필요
+        if (columns.length < 4) {
+          console.warn(`라인 ${index + 2}: 충분한 열이 없습니다 - ${line}`);
+          return null;
+        }
+        
+        const [No, Category, Feature, Value] = columns.map(s => 
+          s ? s.replace(/^"|"$/g, '').trim() : ''
+        );
+        
+        // 필수 필드 검증
+        if (!No || !Category || !Feature) {
+          console.warn(`라인 ${index + 2}: 필수 필드 누락 - No:${No}, Category:${Category}, Feature:${Feature}`);
+          return null;
+        }
+        
+        return { No, Category, Feature, Value: Value || '' };
+      } catch (lineError) {
+        console.error(`라인 ${index + 2} 파싱 오류:`, lineError);
+        return null;
+      }
+    }).filter((f): f is Feature => f !== null);
+    
+    if (features.length === 0) {
+      throw new Error('유효한 feature 데이터를 찾을 수 없습니다');
+    }
+    
+    console.log(`CSV에서 ${features.length}개 features 로드 완료`);
     return features;
+    
   } catch (error) {
     console.error("CSV 파일 읽기 오류:", error);
-    throw new Error("서버에서 'output_features.csv' 파일을 읽을 수 없습니다.");
+    
+    // 파일이 없는 경우 기본 데이터 생성 또는 더 구체적인 오류 처리
+    if (error instanceof Error && error.message.includes('존재하지 않습니다')) {
+      throw new Error(`서버에서 'output_features.csv' 파일을 찾을 수 없습니다. 경로: ${filePath}`);
+    }
+    
+    throw new Error(`CSV 파일 처리 중 오류: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
