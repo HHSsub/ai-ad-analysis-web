@@ -88,7 +88,7 @@ function getFeaturesFromCSV(): Feature[] {
       }
       columns.push(current.trim());
       
-      const [No, Category, Feature, Value] = columns.map(s => s.replace(/"/g, '').trim());
+      const lines = fileContent.split('\n').filter(line => line.trim() && line.includes(','));
       return { No, Category, Feature, Value };
     }).filter(f => f.No && f.Category && f.Feature && f.No !== '');
     
