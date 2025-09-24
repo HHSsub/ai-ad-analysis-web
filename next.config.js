@@ -1,45 +1,31 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  experimental: {
-    // Next.js 14에서는 serverActions가 기본으로 활성화됨
+  // 환경변수
+  env: {
+    NEXTAUTH_URL: process.env.NEXTAUTH_URL || 'http://localhost:3000',
   },
+  
+  // 이미지 도메인 (YouTube 썸네일)
   images: {
     domains: ['i.ytimg.com', 'img.youtube.com'],
-    unoptimized: true
   },
-  webpack: (config, { isServer }) => {
-    if (!isServer) {
-      config.resolve.fallback = {
-        ...config.resolve.fallback,
-        fs: false,
-        path: false,
-        os: false,
-        child_process: false,
-        sqlite3: false,
-      };
-    }
-    return config;
+  
+  // 외부 패키지 설정
+  experimental: {
+    serverComponentsExternalPackages: ['googleapis', 'google-auth-library'],
   },
-  // 환경변수 설정
-  env: {
-    YOUTUBE_API_KEY: process.env.YOUTUBE_API_KEY,
-    GEMINI_API_KEY: process.env.GEMINI_API_KEY,
-    SERPAPI_KEY: process.env.SERPAPI_KEY,
-    GOOGLE_DRIVE_FOLDER_ID: process.env.GOOGLE_DRIVE_FOLDER_ID,
-  },
-  // 빌드 최적화
+  
+  // TypeScript/ESLint 설정
   typescript: {
-    // 타입 체크 유지하되 중요하지 않은 오류는 허용
     ignoreBuildErrors: false,
   },
   eslint: {
-    // ESLint 체크 유지
     ignoreDuringBuilds: false,
   },
-  // API 응답 시간 제한 증가
-  serverRuntimeConfig: {
-    maxDuration: 300
-  },
+  
+  // 프로덕션 최적화
+  swcMinify: true,
+  output: 'standalone',
 };
 
 module.exports = nextConfig;
