@@ -59,23 +59,22 @@ async function extractSubtitles(videoId: string): Promise<{ text: string; langua
   return { text: '', language: 'none' };
 }
 
-// --- CSV 파싱 함수 ---
-
-// --- CSV 파싱 함수 (에러 방지 강화) ---
+// --- CSV 파싱 함수 (TypeError 해결) ---
 function getFeaturesFromCSV(): Feature[] {
   const filePath = path.join(process.cwd(), 'src', 'data', 'output_features.csv');
   
   try {
-    // 파일 존재 여부 먼저 확인
+    // 파일 존재 확인
     if (!fs.existsSync(filePath)) {
       throw new Error(`CSV 파일이 존재하지 않습니다: ${filePath}`);
     }
 
+    // 파일 읽기
     let fileContent = fs.readFileSync(filePath, 'utf-8');
     
-    // fileContent가 null이나 undefined인지 확인
-    if (!fileContent) {
-      throw new Error('CSV 파일 내용을 읽을 수 없습니다 (빈 파일이거나 권한 문제)');
+    // null/undefined 체크
+    if (!fileContent || fileContent.length === 0) {
+      throw new Error('CSV 파일이 비어있거나 읽을 수 없습니다');
     }
 
     // BOM 제거
@@ -83,16 +82,11 @@ function getFeaturesFromCSV(): Feature[] {
       fileContent = fileContent.slice(1);
     }
     
-    // 파일 내용이 비어있는지 확인
-    if (fileContent.trim().length === 0) {
-      throw new Error('CSV 파일이 비어있습니다');
-    }
-    
-    // 라인별로 분리하고 빈 라인 제거
-    const lines = fileContent.split('\n').filter(line => line.trim().length > 0);
+    // 빈 라인 필터링 (에러 발생 지점 수정)
+    const lines = fileContent.split('\n').filter(line => line && line.trim().length > 0);
     
     if (lines.length < 2) {
-      throw new Error('CSV 파일에 데이터가 없습니다 (헤더만 있거나 완전히 비어있음)');
+      throw new Error('CSV 파일에 충분한 데이터가 없습니다');
     }
     
     const features = lines.slice(1).map((line, index) => {
@@ -114,9 +108,8 @@ function getFeaturesFromCSV(): Feature[] {
         }
         columns.push(current.trim());
         
-        // 최소 4개 열이 필요
         if (columns.length < 4) {
-          console.warn(`라인 ${index + 2}: 충분한 열이 없습니다 - ${line}`);
+          console.warn(`Line ${index + 2}: 충분한 컬럼이 없습니다`);
           return null;
         }
         
@@ -124,35 +117,28 @@ function getFeaturesFromCSV(): Feature[] {
           s ? s.replace(/^"|"$/g, '').trim() : ''
         );
         
-        // 필수 필드 검증
         if (!No || !Category || !Feature) {
-          console.warn(`라인 ${index + 2}: 필수 필드 누락 - No:${No}, Category:${Category}, Feature:${Feature}`);
+          console.warn(`Line ${index + 2}: 필수 필드 누락`);
           return null;
         }
         
         return { No, Category, Feature, Value: Value || '' };
       } catch (lineError) {
-        console.error(`라인 ${index + 2} 파싱 오류:`, lineError);
+        console.error(`Line ${index + 2} 파싱 오류:`, lineError);
         return null;
       }
     }).filter((f): f is Feature => f !== null);
     
     if (features.length === 0) {
-      throw new Error('유효한 feature 데이터를 찾을 수 없습니다');
+      throw new Error('유효한 feature를 찾을 수 없습니다');
     }
     
-    console.log(`CSV에서 ${features.length}개 features 로드 완료`);
+    console.log(`CSV 로딩 완료: ${features.length}개 features`);
     return features;
     
   } catch (error) {
     console.error("CSV 파일 읽기 오류:", error);
-    
-    // 파일이 없는 경우 기본 데이터 생성 또는 더 구체적인 오류 처리
-    if (error instanceof Error && error.message.includes('존재하지 않습니다')) {
-      throw new Error(`서버에서 'output_features.csv' 파일을 찾을 수 없습니다. 경로: ${filePath}`);
-    }
-    
-    throw new Error(`CSV 파일 처리 중 오류: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`CSV 파일 처리 실패: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
@@ -201,18 +187,16 @@ You are a **YouTube Video Analysis Expert** and the user's content creation part
 ### 1. IMMEDIATE VIDEO ASSESSMENT
 **Video Type:** ${isShortVideo ? 'SHORT VIDEO (≤60 seconds)' : 'STANDARD VIDEO (>60 seconds)'}
 **Duration:** ${durationSeconds} seconds
-**Analysis Strategy:** ${isShortVideo ? 'INTENSIVE MICRO-ANALYSIS - Every frame counts, focus on rapid visual cues and immediate impressions' : 'COMPREHENSIVE ANALYSIS - Detailed examination of audio-visual content, scene changes, context, and product/brand cues.'}
+**Analysis Strategy:** ${isShortVideo ? 'Focus on immediate visual impact, thumbnail analysis, and title/description inference for missing elements' : 'Comprehensive content analysis with script and visual elements'}
 
-### 2. VIDEO INFORMATION DATABASE
-- **Title:** ${snippet.title}
-- **Description:** ${snippet.description?.substring(0, 1000) || 'No description'}
-- **Views:** ${statistics.viewCount || 'N/A'}
-- **Likes:** ${statistics.likeCount || 'N/A'}
-- **Comments:** ${statistics.commentCount || 'N/A'}
-- **Channel:** ${snippet.channelTitle || 'N/A'}
-- **Published:** ${snippet.publishedAt || 'N/A'}
-- **Script Language:** ${scriptData.language}
-- **Script Content:** ${scriptData.text.substring(0, 2000) || 'No subtitles available'}
+### 2. VIDEO DATA AVAILABLE
+**Title:** ${snippet.title || 'N/A'}
+**Channel:** ${snippet.channelTitle || 'N/A'}
+**Description:** ${snippet.description?.substring(0, 200) || 'N/A'}...
+**Views:** ${statistics?.viewCount || 'N/A'}
+**Duration:** ${contentDetails?.duration || 'N/A'}
+**Script Language:** ${scriptData.language !== 'none' ? scriptData.language : 'No subtitles'}
+**Script Content:** ${scriptData.text ? scriptData.text.substring(0, 300) + '...' : 'No script available'}
 
 ### 3. ANALYSIS FEATURES TO COMPLETE
 ${featuresText}
@@ -284,50 +268,42 @@ function parseAndValidateResponse(text: string, features: Feature[]): any {
       console.warn('분석실패율이 너무 높음. 재시도 필요할 수 있음.');
     }
     
-    console.log(`파싱 완료: ${Object.keys(parsed).length}개 features`);
     return parsed;
-  } catch (e) {
-    console.error('JSON 파싱 실패:', e);
-    throw new Error('JSON 파싱에 실패했습니다');
+  } catch (parseError) {
+    console.error('JSON 파싱 실패:', parseError);
+    console.log('파싱 시도한 텍스트:', jsonMatch[0].substring(0, 200));
+    throw new Error('Gemini 응답을 JSON으로 변환할 수 없습니다');
   }
 }
 
-// --- YouTube 메타데이터 기반 초기값 설정 ---
-function setYouTubeMetadata(analysis: any, features: Feature[], videoData: any): any {
-  const { snippet, statistics, contentDetails } = videoData;
-  const result = { ...analysis };
+// --- 유튜브 메타데이터 기반 추론 ---
+function inferFeaturesFromYouTubeMetadata(videoData: any, features: Feature[]): any {
+  const { snippet, statistics } = videoData;
+  const result: any = {};
   
   features.forEach(feature => {
     const featureKey = `feature_${feature.No}`;
     
     switch (feature.Feature) {
-      case '전체 영상 길이':
-        if (contentDetails.duration) {
-          result[featureKey] = contentDetails.duration;
-        }
-        break;
-      case '조회수':
-        if (statistics.viewCount) {
-          result[featureKey] = statistics.viewCount;
-        }
-        break;
-      case '좋아요 수':
-        if (statistics.likeCount) {
-          result[featureKey] = statistics.likeCount;
-        }
+      case '영상 제목':
+        result[featureKey] = snippet.title || 'N/A';
         break;
       case '채널명':
-        if (snippet.channelTitle) {
-          result[featureKey] = snippet.channelTitle;
-        }
+        result[featureKey] = snippet.channelTitle || 'N/A';
         break;
-      case '영상 제목':
-        if (snippet.title) {
-          result[featureKey] = snippet.title;
-        }
+      case '조회수':
+        result[featureKey] = statistics?.viewCount ? parseInt(statistics.viewCount).toLocaleString() : 'N/A';
         break;
-      case '영상 설명':
-        result[featureKey] = snippet.description ? '있음' : '없음';
+      case '좋아요 수':
+        result[featureKey] = statistics?.likeCount ? parseInt(statistics.likeCount).toLocaleString() : 'N/A';
+        break;
+      case '댓글 수':
+        result[featureKey] = statistics?.commentCount ? parseInt(statistics.commentCount).toLocaleString() : 'N/A';
+        break;
+      case '광고 여부':
+        result[featureKey] = snippet.title?.includes('광고') || snippet.description?.includes('광고') || 
+                           snippet.title?.includes('AD') || snippet.description?.includes('sponsored') ? 
+                           '있음' : '없음';
         break;
       case '게시일':
         if (snippet.publishedAt) {
@@ -403,142 +379,132 @@ async function analyzeSingleVideo(video: VideoInput, features: Feature[], youtub
         part: ['snippet', 'statistics', 'contentDetails'],
         id: [videoId],
       });
+
       if (response.data.items && response.data.items.length > 0) {
         videoData = response.data.items[0];
+        console.log('YouTube API 데이터 로드 성공');
       } else {
-        console.warn(`YouTube 메타 없음 → Gemini-only 폴백 진행 (ID: ${videoId})`);
+        console.log('YouTube API에서 영상 정보를 찾을 수 없음');
       }
-    } catch (e: any) {
-      console.warn(`YouTube API 호출 실패 → Gemini-only 폴백 진행: ${e?.message || e}`);
+    } catch (apiError) {
+      console.log('YouTube API 오류 (메타데이터 없이 진행):', (apiError as any)?.message);
     }
-  } else {
-    console.warn('YOUTUBE_API_KEY 미설정 → Gemini-only 폴백 진행');
   }
 
+  // 폴백: 입력 데이터 기반 메타데이터 생성
   if (!videoData) {
     videoData = buildFallbackVideoData(video);
+    console.log('폴백 메타데이터 사용');
   }
-  
+
   // 자막 추출
   const scriptData = await extractSubtitles(videoId);
 
-  // 향상된 프롬프트로 Gemini 분석
-  const maxRetries = 2;
-  let bestAnalysis = null as null | { analysisResult: any; stats: { completed: number; incomplete: number; total: number; percentage: number } };
-  let bestCompletionRate = 0;
+  // YouTube 메타데이터 기반 추론 (기본 추론)
+  const baseInferences = inferFeaturesFromYouTubeMetadata(videoData, features);
 
-  // 썸네일 멀티모달 입력 준비
-  const thumbUrls = getThumbnailUrls(videoId);
-  const imageParts = await fetchInlineImageParts(thumbUrls, 2);
-
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      const prompt = createExpertAnalysisPrompt(videoData, features, scriptData);
-      
-      console.log(`분석 시도 ${attempt}/${maxRetries}: ${video.title}`);
-      
-      // 텍스트 프롬프트 + 썸네일 이미지 파트로 멀티모달 호출
-      const parts: any[] = [{ text: prompt }, ...imageParts];
-
-      const result = await callGeminiWithTransientRetry(() =>
-        model.generateContent({
-          contents: [{ role: 'user', parts }],
-        })
-      );
-
-      const resultResponse = await (result as any).response;
-      const text = resultResponse.text();
-      
-      let analysisResult = parseAndValidateResponse(text, features);
-      analysisResult = setYouTubeMetadata(analysisResult, features, videoData);
-      
-      // 완료도 계산
-      const stats = calculateCompletionStats(analysisResult);
-      console.log(`시도 ${attempt} 완료율: ${stats.percentage}%`);
-      
-      // 더 좋은 결과면 저장
-      if (stats.percentage > bestCompletionRate) {
-        bestCompletionRate = stats.percentage;
-        bestAnalysis = { analysisResult, stats };
-      }
-      
-      // 80% 이상이면 만족
-      if (stats.percentage >= 80) {
-        console.log(`높은 완료율 달성 (${stats.percentage}%), 분석 종료`);
-        break;
-      }
-      
-    } catch (e: any) {
-      console.error(`분석 시도 ${attempt} 실패:`, e.message);
-      if (attempt === maxRetries) {
-        throw new Error(`모든 분석 시도 실패: ${e.message}`);
-      }
-    }
+  // Gemini AI 분석 (고급 분석)
+  let analysisResults = {};
+  try {
+    const prompt = createExpertAnalysisPrompt(videoData, features, scriptData);
+    console.log(`Gemini AI 분석 시작... (프롬프트 길이: ${prompt.length}자)`);
     
-    if (attempt < maxRetries) {
-      await new Promise(resolve => setTimeout(resolve, 2000));
+    const geminiResponse = await callGeminiWithTransientRetry(
+      model,
+      prompt,
+      { maxRetries: 2, baseDelay: 1000 }
+    );
+    
+    if (geminiResponse && geminiResponse.trim().length > 0) {
+      analysisResults = parseAndValidateResponse(geminiResponse, features);
+      console.log('Gemini AI 분석 완료');
+    } else {
+      throw new Error('Gemini AI가 빈 응답을 반환했습니다');
     }
+  } catch (geminiError) {
+    console.error('Gemini AI 분석 실패:', (geminiError as any)?.message);
+    console.log('YouTube 메타데이터만으로 분석 진행');
+    
+    // Gemini 실패시 기본 추론 결과만 사용
+    features.forEach(feature => {
+      const featureKey = `feature_${feature.No}`;
+      if (!baseInferences[featureKey]) {
+        analysisResults[featureKey] = '분석불가/AI분석실패';
+      }
+    });
   }
 
-  if (!bestAnalysis) {
-    throw new Error('분석 결과를 얻을 수 없습니다');
-  }
+  // 기본 추론과 AI 분석 결과 병합
+  const finalAnalysis = { ...baseInferences, ...analysisResults };
 
-  // 카테고리별 정리
+  // 카테고리별로 분석 결과 재구성
   const categorizedAnalysis: { [category: string]: { [feature: string]: string } } = {};
   features.forEach(feature => {
     const featureKey = `feature_${feature.No}`;
-    const value = bestAnalysis!.analysisResult[featureKey] || '분석불가/AI처리오류';
-    
     if (!categorizedAnalysis[feature.Category]) {
       categorizedAnalysis[feature.Category] = {};
     }
-    categorizedAnalysis[feature.Category][feature.Feature] = value;
+    categorizedAnalysis[feature.Category][feature.Feature] = finalAnalysis[featureKey] || 'N/A';
   });
-  
-  console.log(`영상 분석 완료: ${video.title} - 최종 완료도 ${bestCompletionRate}% (${bestAnalysis.stats.completed}/${bestAnalysis.stats.total})`);
-  
-  return { 
-    ...video, 
-    id: videoId, 
-    status: 'completed', 
+
+  // 완료도 통계 계산
+  const completionStats = calculateCompletionStats(finalAnalysis);
+
+  return {
+    id: videoId,
+    title: video.title,
+    url: video.url,
+    notes: video.notes,
+    status: 'completed',
     analysis: categorizedAnalysis,
-    completionStats: bestAnalysis.stats,
-    scriptLanguage: scriptData.language
+    features: finalAnalysis, // 플랫 구조 유지 (호환성)
+    completionStats,
+    scriptLanguage: scriptData.language,
   };
 }
 
-// --- API 라우트 핸들러 ---
-export async function POST(req: NextRequest) {
-  const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY;
-  const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-
-  if (!GEMINI_API_KEY) {
-    return NextResponse.json({ message: 'GEMINI_API_KEY가 설정되어 있지 않습니다.' }, { status: 500 });
-  }
-  
+// --- 메인 POST 핸들러 ---
+export async function POST(request: NextRequest) {
   try {
-    const youtube = YOUTUBE_API_KEY ? google.youtube({ version: 'v3', auth: YOUTUBE_API_KEY }) : null;
-    const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-    const model = genAI.getGenerativeModel({ 
-      model: "gemini-2.0-flash-exp",
-      safetySettings: [
-        { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-        { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
-        { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
-        { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-      ]
-    });
-    
-    const body = await req.json();
-    const videos: VideoInput[] = body.videos.filter((v: VideoInput) => v.url && v.url.trim() !== '');
+    const body = await request.json();
+    const { videos } = body;
 
-    if (videos.length === 0) {
-      return NextResponse.json({ message: '분석할 영상이 없습니다.' }, { status: 400 });
+    if (!videos || !Array.isArray(videos) || videos.length === 0) {
+      return NextResponse.json({ 
+        message: '분석할 영상 목록이 필요합니다.' 
+      }, { status: 400 });
     }
 
     const features = getFeaturesFromCSV();
     console.log(`분석 시작: ${videos.length}개 영상, ${features.length}개 features`);
+
+    // YouTube API 초기화 (선택적)
+    let youtube = null;
+    const youtubeApiKey = process.env.YOUTUBE_API_KEY;
+    if (youtubeApiKey) {
+      youtube = google.youtube({ version: 'v3', auth: youtubeApiKey });
+      console.log('YouTube API 초기화 완료');
+    } else {
+      console.log('YouTube API 키 없음 - 메타데이터 없이 진행');
+    }
+
+    // Gemini AI 초기화
+    const geminiApiKey = process.env.GEMINI_API_KEY;
+    if (!geminiApiKey) {
+      throw new Error('GEMINI_API_KEY 환경변수가 설정되지 않았습니다.');
+    }
+    
+    const genAI = new GoogleGenerativeAI(geminiApiKey);
+    const model = genAI.getGenerativeModel({ 
+      model: 'gemini-2.5-flash',
+      safetySettings: [
+        { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
+        { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+        { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+        { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
+      ],
+      generationConfig: { temperature: 0.1, maxOutputTokens: 8000 }
+    });
 
     const results: any[] = [];
     for (let i = 0; i < videos.length; i++) {
