@@ -18,27 +18,17 @@ async function collectYouTubeAds() {
   return new Promise((resolve, reject) => {
     log('YouTube 광고 수집 시작...');
     
-    // collectYouTubeAds 함수 수정 부분만
     const pythonScript = path.join(process.cwd(), 'python_scripts', 'youtube_ads_collector_auto_wrapper.py');
     const venvPython = path.join(process.cwd(), 'venv', 'bin', 'python');
     
-    // Python 래퍼 스크립트 생성
-    const wrapperScript = path.join(process.cwd(), 'python_scripts', 'auto_wrapper.py');
-    const wrapperContent = `
-import os
-os.environ['MAX_ADS_PER_QUERY'] = '30'
-os.environ['AUTO_MODE'] = 'true'
-os.environ['SERPAPI_KEY'] = os.environ.get('SERPAPI_KEY', '646e6386e54a3e331122aa9460166830bcdbd35c89283b857dcf66901e11db2a')
-
-import youtube_ads_collector_with_db
-youtube_ads_collector_with_db.main()
-`;
-    
-    require('fs').writeFileSync(wrapperScript, wrapperContent);
-    
-    const pythonProcess = spawn(venvPython, [wrapperScript], {
+    const pythonProcess = spawn(venvPython, [pythonScript], {
       cwd: process.cwd(),
-      env: process.env
+      env: {
+        ...process.env,
+        SERPAPI_KEY: '646e6386e54a3e331122aa9460166830bcdbd35c89283b857dcf66901e11db2a',
+        MAX_ADS_PER_QUERY: '50',
+        AUTO_MODE: 'true'
+      }
     });
     
     let collected = 0;
@@ -108,26 +98,30 @@ async function analyzePendingAds() {
             url: ad.url,
             note: ad.note || '자동 수집됨'
           }]
+        }, {
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          timeout: 300000 // 5분 타임아웃
         });
         
         if (response.data.success) {
           analyzed++;
-          // DB 상태 업데이트 (SQL injection 방지)
-          const updateQuery = `UPDATE youtube_ads SET analysis_status = 'completed', analyzed_at = datetime('now') WHERE url = ?`;
-          execSync(`sqlite3 "${DB_PATH}" "${updateQuery}" "${ad.url}"`);
+          // DB 상태 업데이트
+          execSync(`sqlite3 "${DB_PATH}" "UPDATE youtube_ads SET analysis_status = 'completed', analyzed_at = datetime('now') WHERE url = '${ad.url.replace(/'/g, "''")}'"`);
         } else {
           failed++;
+          execSync(`sqlite3 "${DB_PATH}" "UPDATE youtube_ads SET analysis_status = 'failed' WHERE url = '${ad.url.replace(/'/g, "''")}'"`);
         }
         
       } catch (error) {
         log(`분석 실패: ${error.message}`, 'ERROR');
         failed++;
-        const updateQuery = `UPDATE youtube_ads SET analysis_status = 'failed' WHERE url = ?`;
-        execSync(`sqlite3 "${DB_PATH}" "${updateQuery}" "${ad.url}"`);
+        execSync(`sqlite3 "${DB_PATH}" "UPDATE youtube_ads SET analysis_status = 'failed' WHERE url = '${ad.url.replace(/'/g, "''")}'"`);
       }
       
-      // API Rate Limit 대응 (5초 대기)
-      await new Promise(resolve => setTimeout(resolve, 5000));
+      // API Rate Limit 대응 (10초 대기)
+      await new Promise(resolve => setTimeout(resolve, 10000));
     }
     
     return { analyzed, failed };
@@ -175,21 +169,33 @@ async function runFullWorkflow() {
   try {
     log('=== 전체 자동화 워크플로우 시작 ===');
     
-    // 1. YouTube 광고 수집
+    // DB에 pending 광고가 있는지 먼저 확인
+    const pendingCheck = execSync(`sqlite3 "${DB_PATH}" "SELECT COUNT(*) FROM youtube_ads WHERE analysis_status = 'pending'"`).toString().trim();
+    const pendingCount = parseInt(pendingCheck) || 0;
+    
+    if (pendingCount > 0) {
+      log(`이미 대기중인 광고 ${pendingCount}개 발견 - 바로 분석 시작`);
+      const { analyzed, failed } = await analyzePendingAds();
+      log(`분석 결과: 성공 ${analyzed}개, 실패 ${failed}개`);
+      
+      if (analyzed > 0) {
+        await uploadResults();
+      }
+    }
+    
+    // 새로운 광고 수집
     const newAds = await collectYouTubeAds();
     
-    // 2. 신규 광고가 있으면 분석
+    // 신규 광고가 있으면 분석
     if (newAds > 0) {
       await new Promise(resolve => setTimeout(resolve, 10000)); // 10초 대기
       const { analyzed, failed } = await analyzePendingAds();
       log(`분석 결과: 성공 ${analyzed}개, 실패 ${failed}개`);
       
-      // 3. 분석 완료된 결과 업로드
+      // 분석 완료된 결과 업로드
       if (analyzed > 0) {
         await uploadResults();
       }
-    } else {
-      log('신규 광고가 없어 분석을 건너뜁니다.');
     }
     
     log('=== 워크플로우 완료 ===');
