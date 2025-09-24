@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "postinstall": "npm run setup-python",
+    "setup-python": "pip3 install requests sqlite3 --break-system-packages || pip3 install requests sqlite3 || echo 'Python dependencies installation completed'"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
@@ -28,6 +30,7 @@
     "react": "^18",
     "react-dom": "^18",
     "react-hot-toast": "^2.4.1",
+    "sqlite3": "^5.1.6",
     "tailwind-merge": "^3.3.1",
     "tailwindcss": "^3.3.0",
     "tailwindcss-animate": "^1.0.7",
