@@ -10,7 +10,13 @@
     "start:production": "next start",
     "lint": "next lint",
     "postinstall": "npm run setup-python",
-    "setup-python": "pip3 install requests sqlite3 --break-system-packages || pip3 install requests sqlite3 || echo 'Python dependencies installation completed'"
+    "setup-python": "pip3 install requests sqlite3 schedule --break-system-packages || pip3 install requests sqlite3 schedule || echo 'Python dependencies installation completed'",
+    "pm2:start": "pm2 start ecosystem.config.js",
+    "pm2:restart": "pm2 restart all",
+    "pm2:stop": "pm2 stop all",
+    "pm2:status": "pm2 status",
+    "pm2:logs": "pm2 logs",
+    "verify-drive": "node scripts/verify-service-account.mjs"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
@@ -21,12 +27,14 @@
     "@types/react-dom": "^18",
     "autoprefixer": "^10.0.1",
     "axios": "^1.6.0",
+    "bottleneck": "^2.19.5",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "exceljs": "^4.4.0",
     "googleapis": "^128.0.0",
     "lucide-react": "^0.263.1",
     "next": "^14.0.3",
+    "node-cron": "^3.0.2",
     "papaparse": "^5.3.16",
     "postcss": "^8",
     "react": "^18",
@@ -42,6 +50,7 @@
     "zustand": "^4.4.7"
   },
   "devDependencies": {
+    "@types/node-cron": "^3.0.8",
     "@types/papaparse": "^5.3.16",
     "eslint": "^8",
     "eslint-config-next": "^14.0.3"
