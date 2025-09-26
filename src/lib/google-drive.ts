@@ -136,7 +136,7 @@ export class GoogleDriveUploader {
       email: credentials.client_email,
       key: credentials.private_key,
       scopes: [
-        'https://www.googleapis.com/auth/drive.file',
+        'https://www.googleapis.com/auth/spreadsheets',
         'https://www.googleapis.com/auth/drive'
       ],
       subject: 'contact@upnexx.ai' // ← 공유드라이브에 ‘멤버’로 등록된 조직 사용자 이메일!
