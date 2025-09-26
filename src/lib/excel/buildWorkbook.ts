@@ -1,7 +1,7 @@
 // src/lib/excel/buildWorkbook.ts - 156개 특징 완전 지원 Excel 빌더
 import * as ExcelJS from 'exceljs';
-import path from 'path';
-import fs from 'fs';
+import * as path from 'path';
+import * as fs from 'fs';
 
 export interface AnalysisResult {
   title: string;
@@ -343,9 +343,9 @@ export async function buildWorkbookBuffer(
   
   // Buffer로 변환
   const buffer = await workbook.xlsx.writeBuffer();
-  console.log(`✅ Excel 워크북 생성 완료: ${buffer.length} bytes (156개 특징 완전 포함)`);
+  console.log(`✅ Excel 워크북 생성 완료: ${(buffer as any).length} bytes`);
   
-  return buffer as Buffer;
+  return buffer as any;
 }
 
 /**
@@ -604,7 +604,7 @@ async function createScoreComparisonSheet(workbook: ExcelJS.Workbook, results: A
   
   // 데이터 행 추가
   sortedResults.forEach((result, index) => {
-    const scores = result.scores || {};
+    const scores = result.scores || {} as any;
     
     const row = worksheet.addRow([
       index + 1,
@@ -686,7 +686,7 @@ async function createCategoryAnalysisSheet(
   let currentRow = 1;
   
   // 각 카테고리별로 섹션 생성 (10개 카테고리 완전 포함)
-  for (const [categoryName, categoryFeatures] of categoriesMap) {
+  for (const [categoryName, categoryFeatures] of Array.from(categoriesMap)) {
     // 카테고리 헤더
     const categoryHeaderRow = worksheet.getRow(currentRow);
     categoryHeaderRow.getCell(1).value = `${categoryName} (${categoryFeatures.length}개 특징)`;
