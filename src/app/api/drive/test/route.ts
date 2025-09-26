@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { globalDriveUploader } from '@/lib/google-drive';
+import { globalDriveUploader } from '../../../../lib/google-drive';
 
 export async function GET(req: NextRequest) {
   try {
