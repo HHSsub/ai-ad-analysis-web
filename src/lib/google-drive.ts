@@ -143,7 +143,9 @@ export class GoogleDriveUploader {
     });
     
     this.drive = google.drive({ version: 'v3', auth: this.auth });
+    console.log(this.auth.subject) // 제대로 설정된거 맞는지 재확인 
   }
+  
   
   /**
    * 환경변수에서 인증 정보 파싱 (강화된 버전)
