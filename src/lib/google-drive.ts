@@ -138,7 +138,8 @@ export class GoogleDriveUploader {
       scopes: [
         'https://www.googleapis.com/auth/drive.file',
         'https://www.googleapis.com/auth/drive'
-      ]
+      ],
+      subject: 'contact@upnexx.ai' // ← 공유드라이브에 ‘멤버’로 등록된 조직 사용자 이메일!
     });
     
     this.drive = google.drive({ version: 'v3', auth: this.auth });
