@@ -3,8 +3,8 @@ import { google } from 'googleapis';
 import { JWT } from 'google-auth-library';
 import { Readable } from 'stream';
 import { buildWorkbookBuffer } from './excel/buildWorkbook';
-import path from 'path';
-import fs from 'fs';
+import * as path from 'path';
+import * as fs from 'fs';
 
 export interface DriveUploadResult {
   success: boolean;
