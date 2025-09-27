@@ -1,46 +1,10 @@
-// src/app/api/analyze/route.ts - 기존 파일 완전 수정
+// src/app/api/analyze/route.ts - 서버 환경 완전 대응 수정
 import { NextRequest, NextResponse } from 'next/server';
 import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from '@google/generative-ai';
 import { google } from 'googleapis';
 import { getSubtitles } from 'youtube-captions-scraper';
 import path from 'path';
 import fs from 'fs';
-
-// 기존 헬퍼 import (있는 경우만)
-let callGeminiWithTransientRetry: any;
-let getSubtitlesWithFallback: any;
-let getThumbnailUrls: any;
-let fetchInlineImageParts: any;
-let globalDriveUploader: any;
-
-try {
-  const geminiRateLimit = require('@/lib/ai/gemini-rate-limit');
-  callGeminiWithTransientRetry = geminiRateLimit.callGeminiWithTransientRetry;
-} catch (e) {
-  // 라이브러리가 없으면 기본 호출 사용
-}
-
-try {
-  const subtitleFallback = require('@/lib/youtube/subtitle-fallback');
-  getSubtitlesWithFallback = subtitleFallback.getSubtitlesWithFallback;
-} catch (e) {
-  // 라이브러리가 없으면 스킵
-}
-
-try {
-  const thumbnails = require('@/lib/youtube/thumbnails');
-  getThumbnailUrls = thumbnails.getThumbnailUrls;
-  fetchInlineImageParts = thumbnails.fetchInlineImageParts;
-} catch (e) {
-  // 라이브러리가 없으면 스킵
-}
-
-try {
-  const driveLib = require('@/lib/google-drive');
-  globalDriveUploader = driveLib.globalDriveUploader;
-} catch (e) {
-  // 라이브러리가 없으면 스킵
-}
 
 // --- 타입 정의 ---
 interface VideoInput {
@@ -59,112 +23,8 @@ interface Feature {
 // --- 전역 변수 ---
 let analysisProgress: { [key: string]: any } = {};
 
-// --- 수정된 CSV 파싱 함수 ---
-function getFeaturesFromCSV(): Feature[] {
-  const filePath = path.join(process.cwd(), 'src', 'data', 'output_features.csv');
-  
-  try {
-    if (!fs.existsSync(filePath)) {
-      console.error(`❌ CSV 파일이 존재하지 않습니다: ${filePath}`);
-      return getHardcodedFeatures();
-    }
-
-    let fileContent = fs.readFileSync(filePath, 'utf-8');
-    
-    if (!fileContent || fileContent.length === 0) {
-      console.error('❌ CSV 파일이 비어있습니다');
-      return getHardcodedFeatures();
-    }
-
-    // BOM 제거
-    if (fileContent.charCodeAt(0) === 0xFEFF) {
-      fileContent = fileContent.slice(1);
-    }
-    
-    // 라인 분할 및 빈 줄 제거
-    const lines = fileContent.split('\n')
-      .map(line => line.trim())
-      .filter(line => line.length > 0);
-    
-    if (lines.length < 2) {
-      console.error('❌ CSV 파일에 데이터가 부족합니다');
-      return getHardcodedFeatures();
-    }
-    
-    const features: Feature[] = [];
-    
-    // 헤더 스킵하고 데이터 파싱
-    for (let i = 1; i < lines.length; i++) {
-      const line = lines[i];
-      
-      // 완전히 빈 줄이나 쉼표만 있는 줄은 스킵
-      if (!line || line === ',' || line === ',,,') {
-        continue;
-      }
-      
-      const columns = parseCsvLine(line);
-      
-      // 최소 3개 컬럼이 있고, 모두 유효한 데이터인지 확인
-      if (columns.length >= 3) {
-        const [no, category, feature] = columns.map(col => col.trim());
-        
-        // 유효한 데이터만 추가
-        if (no && category && feature) {
-          features.push({
-            No: no,
-            Category: category,
-            Feature: feature,
-            Value: columns[3]?.trim() || ''
-          });
-        }
-      }
-    }
-    
-    console.log(`✅ CSV에서 ${features.length}개 특징 로드 완료`);
-    
-    if (features.length < 150) {
-      console.warn(`⚠️ 특징 수가 부족합니다 (${features.length}/156). 하드코딩 특징으로 보충합니다.`);
-      return getHardcodedFeatures();
-    }
-    
-    return features;
-    
-  } catch (error) {
-    console.error('❌ CSV 파일 읽기 오류:', error);
-    return getHardcodedFeatures();
-  }
-}
-
-// --- CSV 라인 파싱 함수 ---
-function parseCsvLine(line: string): string[] {
-  const result: string[] = [];
-  let current = '';
-  let inQuotes = false;
-  
-  for (let i = 0; i < line.length; i++) {
-    const char = line[i];
-    
-    if (char === '"') {
-      if (inQuotes && line[i + 1] === '"') {
-        current += '"';
-        i++;
-      } else {
-        inQuotes = !inQuotes;
-      }
-    } else if (char === ',' && !inQuotes) {
-      result.push(current.trim());
-      current = '';
-    } else {
-      current += char;
-    }
-  }
-  
-  result.push(current.trim());
-  return result;
-}
-
-// --- 하드코딩된 156개 특징 ---
-function getHardcodedFeatures(): Feature[] {
+// --- 완전한 156개 특징 하드코딩 ---
+function getComplete156Features(): Feature[] {
   return [
     { No: "1", Category: "인물 분석", Feature: "성별 추정" },
     { No: "2", Category: "인물 분석", Feature: "연령 추정" },
@@ -325,6 +185,106 @@ function getHardcodedFeatures(): Feature[] {
   ];
 }
 
+// --- CSV 파싱 함수 (안전한 폴백 포함) ---
+function getFeaturesFromCSV(): Feature[] {
+  try {
+    const filePath = path.join(process.cwd(), 'src', 'data', 'output_features.csv');
+    
+    if (!fs.existsSync(filePath)) {
+      console.warn('⚠️ CSV 파일이 존재하지 않음. 하드코딩 특징 사용');
+      return getComplete156Features();
+    }
+
+    let fileContent = fs.readFileSync(filePath, 'utf-8');
+    
+    if (!fileContent || fileContent.length === 0) {
+      console.warn('⚠️ CSV 파일이 비어있음. 하드코딩 특징 사용');
+      return getComplete156Features();
+    }
+
+    // BOM 제거
+    if (fileContent.charCodeAt(0) === 0xFEFF) {
+      fileContent = fileContent.slice(1);
+    }
+    
+    const lines = fileContent.split('\n')
+      .map(line => line.trim())
+      .filter(line => line.length > 0);
+    
+    if (lines.length < 2) {
+      console.warn('⚠️ CSV 파일에 데이터가 부족함. 하드코딩 특징 사용');
+      return getComplete156Features();
+    }
+    
+    const features: Feature[] = [];
+    
+    for (let i = 1; i < lines.length; i++) {
+      const line = lines[i];
+      
+      if (!line || line === ',' || line === ',,,') {
+        continue;
+      }
+      
+      const columns = parseCsvLine(line);
+      
+      if (columns.length >= 3) {
+        const [no, category, feature] = columns.map(col => col.trim());
+        
+        if (no && category && feature) {
+          features.push({
+            No: no,
+            Category: category,
+            Feature: feature,
+            Value: columns[3]?.trim() || ''
+          });
+        }
+      }
+    }
+    
+    console.log(`✅ CSV에서 ${features.length}개 특징 로드 완료`);
+    
+    if (features.length < 150) {
+      console.warn(`⚠️ CSV 특징 수 부족 (${features.length}/156). 하드코딩 특징 사용`);
+      return getComplete156Features();
+    }
+    
+    return features;
+    
+  } catch (error) {
+    console.error('❌ CSV 파일 읽기 오류:', error);
+    console.log('🔄 하드코딩된 156개 특징으로 폴백');
+    return getComplete156Features();
+  }
+}
+
+// --- CSV 라인 파싱 함수 ---
+function parseCsvLine(line: string): string[] {
+  const result: string[] = [];
+  let current = '';
+  let inQuotes = false;
+  
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+    
+    if (char === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        current += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (char === ',' && !inQuotes) {
+      result.push(current.trim());
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  
+  result.push(current.trim());
+  return result;
+}
+
 // --- 자막 추출 함수 ---
 async function extractSubtitles(videoId: string): Promise<{ text: string; language: string }> {
   const languages = ['ko', 'en', 'ja', 'zh', 'es', 'fr', 'de', 'it', 'pt', 'ru', 'ar'];
@@ -342,19 +302,6 @@ async function extractSubtitles(videoId: string): Promise<{ text: string; langua
     }
   }
 
-  // 폴백 라이브러리 사용 (있는 경우)
-  if (getSubtitlesWithFallback) {
-    try {
-      const fb = await getSubtitlesWithFallback(videoId);
-      if (fb.text && fb.text.trim().length > 0) {
-        console.log(`✅ timedtext 폴백 성공(${fb.language}) (${fb.text.length}자)`);
-        return fb;
-      }
-    } catch (e) {
-      console.log('⚠️ timedtext 폴백 실패:', e);
-    }
-  }
-
   console.log('⚠️ 자막 추출 실패 - 모든 언어 시도');
   return { text: '', language: 'none' };
 }
@@ -367,11 +314,10 @@ function getYouTubeVideoId(url: string): string | null {
   return match ? match[1] : null;
 }
 
-// --- 기존 향상된 전문가 페르소나 프롬프트 (수정됨) ---
+// --- 기존 향상된 전문가 페르소나 프롬프트 ---
 function createExpertAnalysisPrompt(videoData: any, features: Feature[], scriptData: { text: string; language: string }) {
   const { snippet, statistics, contentDetails } = videoData;
   
-  // Duration을 초 단위로 변환
   const getDurationInSeconds = (duration: string): number => {
     if (!duration) return 0;
     const match = duration.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
@@ -380,7 +326,7 @@ function createExpertAnalysisPrompt(videoData: any, features: Feature[], scriptD
     return parseInt(hours) * 3600 + parseInt(minutes) * 60 + parseInt(seconds);
   };
 
-  const durationSeconds = getDurationInSeconds(contentDetails.duration || '');
+  const durationSeconds = getDurationInSeconds(contentDetails?.duration || '');
   const isShortVideo = durationSeconds <= 60;
 
   const categorizedFeatures = features.reduce((acc, feature) => {
@@ -408,9 +354,9 @@ You are a **YouTube Video Analysis Expert** and the user's content creation part
 **Analysis Strategy:** ${isShortVideo ? 'Focus on immediate visual impact, thumbnail analysis, and title/description inference for missing elements' : 'Comprehensive content analysis with script and visual elements'}
 
 ### 2. VIDEO DATA AVAILABLE
-**Title:** ${snippet.title || 'N/A'}
-**Channel:** ${snippet.channelTitle || 'N/A'}
-**Description:** ${snippet.description?.substring(0, 200) || 'N/A'}...
+**Title:** ${snippet?.title || 'N/A'}
+**Channel:** ${snippet?.channelTitle || 'N/A'}
+**Description:** ${snippet?.description?.substring(0, 200) || 'N/A'}...
 **Views:** ${statistics?.viewCount || 'N/A'}
 **Duration:** ${contentDetails?.duration || 'N/A'}
 **Script Language:** ${scriptData.language !== 'none' ? scriptData.language : 'No subtitles'}
@@ -448,7 +394,7 @@ Provide your analysis in JSON format with exactly these keys:
 
 // --- YouTube 메타데이터 기반 추론 ---
 function inferFeaturesFromYouTubeMetadata(videoData: any, features: Feature[]): any {
-  const { snippet, statistics } = videoData;
+  const { snippet, statistics, contentDetails } = videoData;
   const result: any = {};
   
   features.forEach(feature => {
@@ -456,10 +402,10 @@ function inferFeaturesFromYouTubeMetadata(videoData: any, features: Feature[]): 
     
     switch (feature.Feature) {
       case '영상 제목':
-        result[featureKey] = snippet.title || 'N/A';
+        result[featureKey] = snippet?.title || 'N/A';
         break;
       case '채널명':
-        result[featureKey] = snippet.channelTitle || 'N/A';
+        result[featureKey] = snippet?.channelTitle || 'N/A';
         break;
       case '조회수':
         result[featureKey] = statistics?.viewCount ? parseInt(statistics.viewCount).toLocaleString() : 'N/A';
@@ -471,8 +417,8 @@ function inferFeaturesFromYouTubeMetadata(videoData: any, features: Feature[]): 
         result[featureKey] = statistics?.commentCount ? parseInt(statistics.commentCount).toLocaleString() : 'N/A';
         break;
       case '전체 영상 길이':
-        if (videoData.contentDetails?.duration) {
-          const duration = videoData.contentDetails.duration;
+        if (contentDetails?.duration) {
+          const duration = contentDetails.duration;
           const match = duration.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
           if (match) {
             const [, hours = '0', minutes = '0', seconds = '0'] = match;
@@ -482,12 +428,14 @@ function inferFeaturesFromYouTubeMetadata(videoData: any, features: Feature[]): 
         }
         break;
       case '광고 여부':
-        result[featureKey] = snippet.title?.includes('광고') || snippet.description?.includes('광고') || 
-                           snippet.title?.includes('AD') || snippet.description?.includes('sponsored') ? 
+        const title = snippet?.title?.toLowerCase() || '';
+        const desc = snippet?.description?.toLowerCase() || '';
+        result[featureKey] = title.includes('광고') || title.includes('ad') || 
+                           desc.includes('광고') || desc.includes('sponsored') ? 
                            '있음' : '없음';
         break;
       case '게시일':
-        if (snippet.publishedAt) {
+        if (snippet?.publishedAt) {
           result[featureKey] = new Date(snippet.publishedAt).toLocaleDateString();
         }
         break;
@@ -497,56 +445,65 @@ function inferFeaturesFromYouTubeMetadata(videoData: any, features: Feature[]): 
   return result;
 }
 
-// --- JSON 응답 파싱 및 검증 ---
+// --- Gemini 응답 파싱 (안전한 에러 처리) ---
 function parseAndValidateResponse(text: string, features: Feature[]): any {
-  console.log('🔍 Gemini 응답 파싱 시작');
-  
-  let jsonString = text.trim();
-  jsonString = jsonString.replace(/```json\s*|\s*```/g, '');
-  jsonString = jsonString.replace(/```\s*|\s*```/g, '');
-  
-  const jsonMatch = jsonString.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) {
-    throw new Error('JSON 형식을 찾을 수 없습니다');
-  }
-  
   try {
-    const parsed = JSON.parse(jsonMatch[0]);
+    console.log('🔍 Gemini 응답 파싱 시작');
     
-    // 156개 feature가 모두 있는지 검증
-    const expectedKeys = features.map(f => `feature_${f.No}`);
-    const actualKeys = Object.keys(parsed);
-    const missingKeys = expectedKeys.filter(key => !actualKeys.includes(key));
-    
-    if (missingKeys.length > 0) {
-      console.warn(`누락된 features: ${missingKeys.length}개`);
-      // 누락된 키들을 기본값으로 채우기
-      missingKeys.forEach(key => {
-        parsed[key] = '분석불가/AI응답누락';
-      });
+    if (!text || text.trim().length === 0) {
+      throw new Error('빈 응답 받음');
     }
     
-    const analysisFailureCount = Object.values(parsed).filter(value => 
+    let jsonString = text.trim();
+    jsonString = jsonString.replace(/```json\s*|\s*```/g, '');
+    jsonString = jsonString.replace(/```\s*|\s*```/g, '');
+    
+    const jsonMatch = jsonString.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      throw new Error('JSON 형식을 찾을 수 없습니다');
+    }
+    
+    let parsed;
+    try {
+      parsed = JSON.parse(jsonMatch[0]);
+    } catch (parseError) {
+      console.error('JSON 파싱 실패:', parseError);
+      console.log('파싱 시도한 텍스트:', jsonMatch[0].substring(0, 200));
+      throw new Error('JSON 파싱 실패');
+    }
+    
+    // 156개 feature 검증 및 보완
+    const result: any = {};
+    features.forEach(feature => {
+      const featureKey = `feature_${feature.No}`;
+      result[featureKey] = parsed[featureKey] || '분석불가/AI응답누락';
+    });
+    
+    const analysisFailureCount = Object.values(result).filter(value => 
       String(value).startsWith('분석불가/') || String(value).startsWith('판단불가/')
     ).length;
     
-    const failureRate = (analysisFailureCount / Object.keys(parsed).length) * 100;
-    console.log(`분석실패율: ${failureRate.toFixed(1)}% (${analysisFailureCount}/156)`);
+    const successRate = ((156 - analysisFailureCount) / 156) * 100;
+    console.log(`✅ Gemini 분석 성공률: ${successRate.toFixed(1)}% (${156 - analysisFailureCount}/156)`);
     
-    if (failureRate > 70) {
-      console.warn('분석실패율이 너무 높음. 재시도 필요할 수 있음.');
-    }
+    return result;
     
-    return parsed;
-  } catch (parseError) {
-    console.error('JSON 파싱 실패:', parseError);
-    console.log('파싱 시도한 텍스트:', jsonMatch[0].substring(0, 200));
-    throw new Error('Gemini 응답을 JSON으로 변환할 수 없습니다');
+  } catch (error) {
+    console.error('❌ Gemini 응답 파싱 완전 실패:', error);
+    
+    // 완전 실패시 기본값으로 채우기
+    const fallbackResult: any = {};
+    features.forEach(feature => {
+      const featureKey = `feature_${feature.No}`;
+      fallbackResult[featureKey] = '분석불가/파싱실패';
+    });
+    
+    return fallbackResult;
   }
 }
 
-// --- 분석 완료도 계산 ---
-function calculateCompletionStats(analysis: any): { completed: number; incomplete: number; total: number; percentage: number } {
+// --- 완료도 통계 계산 ---
+function calculateCompletionStats(analysis: any) {
   const total = Object.keys(analysis).length;
   let completed = 0;
   let incomplete = 0;
@@ -573,7 +530,7 @@ function calculateCompletionStats(analysis: any): { completed: number; incomplet
   };
 }
 
-// --- 유튜브 메타 폴백 오브젝트 생성 ---
+// --- 폴백 메타데이터 생성 ---
 function buildFallbackVideoData(input: VideoInput) {
   return {
     snippet: {
@@ -593,15 +550,15 @@ function buildFallbackVideoData(input: VideoInput) {
   };
 }
 
-// --- 재시도 로직이 추가된 분석 함수 ---
+// --- 단일 영상 분석 함수 ---
 async function analyzeSingleVideo(video: VideoInput, features: Feature[], youtube: any | null, model: any): Promise<any> {
   const videoId = getYouTubeVideoId(video.url);
   if (!videoId) throw new Error(`'${video.url}'은(는) 잘못된 YouTube URL입니다.`);
 
   console.log(`🎬 영상 분석 시작: ${video.title} (ID: ${videoId})`);
 
-  // YouTube 데이터 가져오기 (선택적)
-  let videoData: any | null = null;
+  // 1. YouTube 메타데이터 수집
+  let videoData: any = null;
   if (youtube) {
     try {
       const response = await youtube.videos.list({
@@ -620,50 +577,50 @@ async function analyzeSingleVideo(video: VideoInput, features: Feature[], youtub
     }
   }
 
-  // 폴백: 입력 데이터 기반 메타데이터 생성
+  // 폴백 데이터 생성
   if (!videoData) {
     videoData = buildFallbackVideoData(video);
     console.log('📝 폴백 메타데이터 사용');
   }
 
-  // 자막 추출
+  // 2. 자막 추출
   const scriptData = await extractSubtitles(videoId);
 
-  // YouTube 메타데이터 기반 추론 (기본 추론)
+  // 3. YouTube 메타데이터 기반 기본 추론
   const baseInferences = inferFeaturesFromYouTubeMetadata(videoData, features);
 
-  // Gemini AI 분석 (고급 분석)
+  // 4. Gemini AI 고급 분석 (안전한 에러 처리)
   let analysisResults = {};
   try {
     const prompt = createExpertAnalysisPrompt(videoData, features, scriptData);
     console.log(`🤖 Gemini AI 분석 시작... (프롬프트 길이: ${prompt.length}자)`);
     
-    let geminiResponse;
-    if (callGeminiWithTransientRetry) {
-      // 레이트 리미트 라이브러리 사용
-      geminiResponse = await callGeminiWithTransientRetry(
-        model,
-        prompt,
-        { maxRetries: 2, baseDelay: 1000 }
-      );
-    } else {
-      // 기본 호출
-      const result = await model.generateContent(prompt);
-      const response = await result.response;
-      geminiResponse = response.text();
+    const result = await model.generateContent(prompt);
+    
+    if (!result || !result.response) {
+      throw new Error('Gemini 응답 객체가 없습니다');
     }
     
-    if (geminiResponse && geminiResponse.trim().length > 0) {
-      analysisResults = parseAndValidateResponse(geminiResponse, features);
-      console.log('✅ Gemini AI 분석 완료');
-    } else {
+    const response = await result.response;
+    
+    if (!response || typeof response.text !== 'function') {
+      throw new Error('Gemini 응답에서 text 함수를 찾을 수 없습니다');
+    }
+    
+    const geminiText = response.text();
+    
+    if (!geminiText || geminiText.trim().length === 0) {
       throw new Error('Gemini AI가 빈 응답을 반환했습니다');
     }
+    
+    analysisResults = parseAndValidateResponse(geminiText, features);
+    console.log('✅ Gemini AI 분석 완료');
+    
   } catch (geminiError) {
-    console.error('❌ Gemini AI 분석 실패:', (geminiError as any)?.message);
+    console.error('❌ Gemini AI 분석 실패:', geminiError);
     console.log('📝 YouTube 메타데이터만으로 분석 진행');
     
-    // Gemini 실패시 기본 추론 결과만 사용
+    // Gemini 실패시 기본 추론만 사용
     features.forEach(feature => {
       const featureKey = `feature_${feature.No}`;
       if (!baseInferences[featureKey]) {
@@ -672,10 +629,10 @@ async function analyzeSingleVideo(video: VideoInput, features: Feature[], youtub
     });
   }
 
-  // 기본 추론과 AI 분석 결과 병합
+  // 5. 기본 추론과 AI 분석 결과 병합
   const finalAnalysis = { ...baseInferences, ...analysisResults };
 
-  // 카테고리별로 분석 결과 재구성
+  // 6. 카테고리별로 분석 결과 재구성
   const categorizedAnalysis: { [category: string]: { [feature: string]: string } } = {};
   features.forEach(feature => {
     const featureKey = `feature_${feature.No}`;
@@ -685,7 +642,7 @@ async function analyzeSingleVideo(video: VideoInput, features: Feature[], youtub
     categorizedAnalysis[feature.Category][feature.Feature] = finalAnalysis[featureKey] || 'N/A';
   });
 
-  // 완료도 통계 계산
+  // 7. 완료도 통계 계산
   const completionStats = calculateCompletionStats(finalAnalysis);
 
   return {
@@ -695,7 +652,7 @@ async function analyzeSingleVideo(video: VideoInput, features: Feature[], youtub
     notes: video.notes,
     status: 'completed',
     analysis: categorizedAnalysis,
-    features: finalAnalysis, // 플랫 구조 유지 (호환성)
+    features: finalAnalysis,
     completionStats,
     scriptLanguage: scriptData.language,
   };
@@ -713,10 +670,11 @@ export async function POST(request: NextRequest) {
       }, { status: 400 });
     }
 
+    // 특징 로드 (안전한 폴백 포함)
     const features = getFeaturesFromCSV();
-    console.log(`🎯 분석 시작: ${videos.length}개 영상, ${features.length}개 features`);
+    console.log(`🎯 분석 시작: ${videos.length}개 영상, ${features.length}개 특징`);
 
-    // YouTube API 초기화 (선택적)
+    // API 초기화
     let youtube = null;
     const youtubeApiKey = process.env.YOUTUBE_API_KEY;
     if (youtubeApiKey) {
@@ -726,7 +684,7 @@ export async function POST(request: NextRequest) {
       console.log('⚠️ YouTube API 키 없음 - 메타데이터 없이 진행');
     }
 
-    // Gemini AI 초기화
+    // Gemini AI 초기화 (안전한 에러 처리)
     const geminiApiKey = process.env.GEMINI_API_KEY;
     if (!geminiApiKey) {
       throw new Error('GEMINI_API_KEY 환경변수가 설정되지 않았습니다.');
@@ -773,11 +731,25 @@ export async function POST(request: NextRequest) {
         
         // API 레이트 리미트 방지를 위한 딜레이
         if (i < videos.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, 1000));
+          await new Promise(resolve => setTimeout(resolve, 2000));
         }
         
       } catch (videoError) {
         console.error(`❌ 영상 분석 실패 [${video.title}]:`, videoError);
+        
+        // 실패한 영상도 기본 구조로 추가
+        results.push({
+          id: getYouTubeVideoId(video.url) || `failed_${i}`,
+          title: video.title,
+          url: video.url,
+          notes: video.notes,
+          status: 'failed',
+          analysis: {},
+          features: {},
+          completionStats: { completed: 0, incomplete: 156, total: 156, percentage: 0 },
+          scriptLanguage: 'none'
+        });
+        
         global.analysisProgress.completed = i + 1;
       }
     }
@@ -787,12 +759,13 @@ export async function POST(request: NextRequest) {
 
     console.log(`🎉 전체 분석 완료: ${results.length}개 영상`);
 
-    // Google Drive 자동 업로드 (기존 API 사용)
+    // Google Drive 자동 업로드 (올바른 폴더 ID 사용)
     let uploadResult = null;
     try {
       console.log('☁️ Google Drive 자동 업로드 시작...');
       
-      const uploadResponse = await fetch(`${process.env.NEXTAUTH_URL || 'http://localhost:3000'}/api/drive/upload`, {
+      const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';
+      const uploadResponse = await fetch(`${baseUrl}/api/drive/upload`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
