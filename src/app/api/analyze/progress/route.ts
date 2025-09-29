@@ -1,7 +1,6 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 
-// 이 변수는 analyze/route.ts와 공유되어야 합니다.
-// 실제 구현에서는 Redis나 데이터베이스를 사용하는 것이 좋습니다.
+// 전역 변수를 직접 참조하도록 수정
 declare global {
   var analysisProgress: {
     total: number;
@@ -12,9 +11,9 @@ declare global {
   } | undefined;
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    // 전역 변수에서 진행상황 가져오기
+    // global 객체에서 직접 가져오기
     const progress = global.analysisProgress || {
       total: 0,
       completed: 0,
@@ -23,13 +22,45 @@ export async function GET() {
       videos: []
     };
 
+    console.log(`📊 Progress API 호출 - 완료: ${progress.completed}/${progress.total}, 단계: ${progress.stage}`);
+
+    // 성공/실패 통계 계산
+    const videos = progress.videos || [];
+    const successCount = videos.filter((v: any) => 
+      v.status === 'completed' && (v.completionStats?.percentage || 0) > 5
+    ).length;
+    const failureCount = videos.filter((v: any) => 
+      v.status === 'failed' || (v.completionStats?.percentage || 0) <= 5
+    ).length;
+
     return NextResponse.json({
-      progress,
+      progress: {
+        ...progress,
+        statistics: {
+          success: successCount,
+          failure: failureCount,
+          processing: progress.total - progress.completed
+        }
+      },
       videos: progress.videos
     });
 
   } catch (error) {
     console.error('Progress API error:', error);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    return NextResponse.json({ 
+      error: 'Internal server error',
+      progress: {
+        total: 0,
+        completed: 0,
+        current: '',
+        stage: 'complete',
+        videos: [],
+        statistics: {
+          success: 0,
+          failure: 0,
+          processing: 0
+        }
+      }
+    }, { status: 500 });
   }
 }
