@@ -73,7 +73,7 @@ YouTube 광고 영상을 **자동으로 수집**하고, **AI로 156가지 특성
 | **콘텐츠 구조** | 10개 | 인트로, 오프닝 훅, 구조, CTA, 페이싱 등 |
 | **종합 메타데이터** | 11개 | 영상 길이, 조회수, 좋아요, 댓글, 타겟, 효과성 등 |
 
-**총 156개 특성 모두 누락 없이 완전 구현됨**
+**총 156개 특성 모두 누락 없이 완전 구현**
 
 ---
 
@@ -329,7 +329,7 @@ node scripts/verify-service-account.mjs
 
 ## 📝 라이센스
 
-MIT License
+Hwang Hoe Sun
 
 ---
 
@@ -341,9 +341,8 @@ MIT License
 
 ## 📞 문의
 
-- GitHub Issues: [여기에 이슈 링크]
-- Email: your-email@example.com
+- Email: hhoesun@gmail.com
 
 ---
 
-**완전 자동화된 YouTube 광고 분석 시스템으로 생산성을 극대화하세요!** 🚀
+**완전 자동화된 YouTube 광고 분석 시스템** 
