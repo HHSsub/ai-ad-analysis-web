@@ -23,6 +23,98 @@ interface Feature {
 // --- 전역 변수 ---
 let analysisProgress: { [key: string]: any } = {};
 
+// ===== 🔑 GEMINI API KEY FALLBACK 로직 추가 시작 =====
+function getGeminiApiKeys(): string[] {
+  const keys: string[] = [];
+  
+  // 기본 키
+  if (process.env.GEMINI_API_KEY) {
+    keys.push(process.env.GEMINI_API_KEY);
+  }
+  
+  // fallback 키들 (GEMINI_API_KEY_1, GEMINI_API_KEY_2, ...)
+  let index = 1;
+  while (true) {
+    const key = process.env[`GEMINI_API_KEY_${index}`];
+    if (!key) break;
+    keys.push(key);
+    index++;
+  }
+  
+  console.log(`📋 로드된 Gemini API 키 개수: ${keys.length}`);
+  return keys;
+}
+
+async function callGeminiWithFallback(prompt: string, apiKeys: string[]): Promise<string> {
+  let lastError: any = null;
+  
+  for (let i = 0; i < apiKeys.length; i++) {
+    const apiKey = apiKeys[i];
+    const keyLabel = i === 0 ? 'GEMINI_API_KEY' : `GEMINI_API_KEY_${i}`;
+    
+    try {
+      console.log(`🔑 ${keyLabel} 사용 시도 중... (${i + 1}/${apiKeys.length})`);
+      
+      const genAI = new GoogleGenerativeAI(apiKey);
+      const model = genAI.getGenerativeModel({ 
+        model: 'gemini-2.5-flash',
+        safetySettings: [
+          { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+          { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
+          { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
+          { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE }
+        ]
+      });
+      
+      const result = await model.generateContent(prompt);
+      
+      if (!result || !result.response) {
+        throw new Error('Gemini 응답 객체가 없습니다');
+      }
+      
+      const response = await result.response;
+      
+      if (!response || typeof response.text !== 'function') {
+        throw new Error('Gemini 응답에서 text 함수를 찾을 수 없습니다');
+      }
+      
+      const geminiText = response.text();
+      
+      if (!geminiText || geminiText.trim().length === 0) {
+        throw new Error('Gemini AI가 빈 응답을 반환했습니다');
+      }
+      
+      console.log(`✅ ${keyLabel} 성공`);
+      return geminiText;
+      
+    } catch (error: any) {
+      lastError = error;
+      const errorMessage = error?.message || error?.toString() || 'Unknown error';
+      const statusCode = error?.status || error?.response?.status;
+      
+      console.error(`❌ ${keyLabel} 실패 (${statusCode || 'unknown'}): ${errorMessage}`);
+      
+      // 429 에러가 아니면 즉시 중단
+      if (statusCode && statusCode !== 429) {
+        console.log('⚠️ 429 에러가 아닌 다른 오류 발생. fallback 중단.');
+        throw error;
+      }
+      
+      // 마지막 키가 아니면 다음 키로 계속
+      if (i < apiKeys.length - 1) {
+        console.log(`⏭️ 다음 API 키로 fallback 시도...`);
+        await new Promise(resolve => setTimeout(resolve, 1000)); // 1초 대기
+        continue;
+      }
+    }
+  }
+  
+  // 모든 키 실패
+  console.error('❌ 모든 Gemini API 키 사용 실패');
+  throw lastError || new Error('All Gemini API keys failed');
+}
+// ===== 🔑 GEMINI API KEY FALLBACK 로직 추가 끝 =====
+
 // --- 완전한 156개 특징 하드코딩 ---
 function getComplete156Features(): Feature[] {
   return [
@@ -550,8 +642,8 @@ function buildFallbackVideoData(input: VideoInput) {
   };
 }
 
-// --- 단일 영상 분석 함수 ---
-async function analyzeSingleVideo(video: VideoInput, features: Feature[], youtube: any | null, model: any): Promise<any> {
+// ===== 🔧 analyzeSingleVideo 함수 수정 (callGeminiWithFallback 사용) =====
+async function analyzeSingleVideo(video: VideoInput, features: Feature[], youtube: any | null, apiKeys: string[]): Promise<any> {
   const videoId = getYouTubeVideoId(video.url);
   if (!videoId) throw new Error(`'${video.url}'은(는) 잘못된 YouTube URL입니다.`);
 
@@ -589,25 +681,14 @@ async function analyzeSingleVideo(video: VideoInput, features: Feature[], youtub
   // 3. YouTube 메타데이터 기반 기본 추론
   const baseInferences = inferFeaturesFromYouTubeMetadata(videoData, features);
 
-  // 4. Gemini AI 고급 분석 (안전한 에러 처리)
+  // 4. Gemini AI 고급 분석 (fallback 키 사용)
   let analysisResults = {};
   try {
     const prompt = createExpertAnalysisPrompt(videoData, features, scriptData);
     console.log(`🤖 Gemini AI 분석 시작... (프롬프트 길이: ${prompt.length}자)`);
     
-    const result = await model.generateContent(prompt);
-    
-    if (!result || !result.response) {
-      throw new Error('Gemini 응답 객체가 없습니다');
-    }
-    
-    const response = await result.response;
-    
-    if (!response || typeof response.text !== 'function') {
-      throw new Error('Gemini 응답에서 text 함수를 찾을 수 없습니다');
-    }
-    
-    const geminiText = response.text();
+    // ===== 🔑 여기서 callGeminiWithFallback 함수 사용 =====
+    const geminiText = await callGeminiWithFallback(prompt, apiKeys);
     
     if (!geminiText || geminiText.trim().length === 0) {
       throw new Error('Gemini AI가 빈 응답을 반환했습니다');
@@ -684,22 +765,11 @@ export async function POST(request: NextRequest) {
       console.log('⚠️ YouTube API 키 없음 - 메타데이터 없이 진행');
     }
 
-    // Gemini AI 초기화 (안전한 에러 처리)
-    const geminiApiKey = process.env.GEMINI_API_KEY;
-    if (!geminiApiKey) {
+    // ===== 🔑 Gemini API 키 목록 로드 =====
+    const geminiApiKeys = getGeminiApiKeys();
+    if (geminiApiKeys.length === 0) {
       throw new Error('GEMINI_API_KEY 환경변수가 설정되지 않았습니다.');
     }
-    
-    const genAI = new GoogleGenerativeAI(geminiApiKey);
-    const model = genAI.getGenerativeModel({ 
-      model: 'gemini-2.5-flash',
-      safetySettings: [
-        { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-        { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
-        { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
-        { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE }
-      ]
-    });
     console.log('✅ Gemini AI 초기화 완료');
 
     // 진행률 초기화
@@ -721,7 +791,8 @@ export async function POST(request: NextRequest) {
         global.analysisProgress.current = `${video.title} 분석 중...`;
         global.analysisProgress.stage = 'gemini';
         
-        const result = await analyzeSingleVideo(video, features, youtube, model);
+        // ===== 🔧 apiKeys 전달 =====
+        const result = await analyzeSingleVideo(video, features, youtube, geminiApiKeys);
         results.push(result);
         global.analysisProgress.videos.push(result);
         
