@@ -173,7 +173,7 @@ async function callGeminiWithFallback(prompt: string, apiKeys: string[], retries
     for (const apiKey of apiKeys) {
       try {
         const genAI = new GoogleGenerativeAI(apiKey);
-        const model = genAI.getGenerativeModel({ model: 'gemini-1.5-pro' });
+        const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
         
         const result = await model.generateContent(prompt);
         const responseText = result.response.text();
