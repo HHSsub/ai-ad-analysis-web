@@ -1,3 +1,4 @@
+// 더 이상 사용하지 않는 코드임 (this code is not available for now)
 // 기본 비디오 입력 인터페이스
 export interface VideoInput {
   title: string;
