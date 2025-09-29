@@ -1,4 +1,3 @@
-// src/app/page.tsx
 "use client";
 
 import { useState, ClipboardEvent, useEffect, useRef } from 'react';
@@ -186,7 +185,7 @@ export default function Home() {
     }
   };
 
-  // 수집된 광고들을 분석 시스템에 자동 전송
+  // 수집된 광고들을 분석 시스템에 자동 전송 - 수정됨
   const handleAutoAnalysis = async () => {
     if (!automationStats?.pending) {
       toast.error('분석할 대기 중인 광고가 없습니다.');
@@ -197,9 +196,8 @@ export default function Home() {
     
     try {
       // 대기 중인 광고들을 수동 입력으로 불러와서 분석 시작
-      const pendingResponse = await fetch('/api/automation/collect', {
-        method: 'GET'
-      });
+      // limit 파라미터 추가하여 모든 pending 광고 가져오기
+      const pendingResponse = await fetch(`/api/automation/collect?limit=${automationStats.pending}`);
       
       const pendingData = await pendingResponse.json();
       
@@ -207,7 +205,6 @@ export default function Home() {
         // 대기 중인 광고들을 videos 상태로 설정
         const pendingAds = pendingData.data.recentAds
           .filter((ad: any) => ad.analysis_status === 'pending')
-          .slice(0, 10) // 최대 10개만
           .map((ad: any) => ({
             title: ad.title || '',
             url: ad.url || '',
@@ -218,7 +215,11 @@ export default function Home() {
           setVideos(pendingAds);
           setAnalysisStatus('input');
           toast.success(`${pendingAds.length}개 광고를 분석 대상으로 불러왔습니다.`, { id: 'auto-analysis' });
-          toast('이제 "분석 시작" 버튼을 클릭하세요!', { icon: '👆' });
+          
+          // 자동으로 분석 시작
+          setTimeout(() => {
+            handleAnalyze(pendingAds);
+          }, 1000);
         } else {
           toast.error('분석 가능한 광고가 없습니다.', { id: 'auto-analysis' });
         }
@@ -338,78 +339,99 @@ export default function Home() {
     toast.success(`${pastedRows.length}행의 데이터가 붙여넣어졌습니다.`);
   };
 
-// src/app/page.tsx의 handleAnalyze 함수만 수정
+  // handleAnalyze 함수 수정 - 백엔드 응답 형식 처리
+  const handleAnalyze = async (videosToAnalyze?: VideoRow[]) => {
+    setAnalysisStatus('loading');
+    setError(null);
+    setResults([]);
+    setSelectedVideo(null);
 
-const handleAnalyze = async () => {
-  setAnalysisStatus('loading');
-  setError(null);
-  setResults([]);
-  setSelectedVideo(null);
+    saveSession();
 
-  saveSession();
-
-  const videosToAnalyze = videos.filter(v => v.url.trim() !== '');
-  if (videosToAnalyze.length === 0) {
-    setError("분석할 영상의 URL을 하나 이상 입력해주세요.");
-    setAnalysisStatus('input');
-    return;
-  }
-
-  try {
-    const response = await fetch('/api/analyze', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ videos: videosToAnalyze }),
-    });
-
-    const data = await response.json().catch(async () => {
-      throw new Error(`서버 응답 오류: ${response.status}`);
-    });
-    
-    if (!response.ok) throw new Error(data.message || `서버 에러: ${response.status}`);
-    
-    // 수정된 부분: data.results를 올바르게 처리
-    if (data.results && Array.isArray(data.results)) {
-      // 백엔드에서 온 결과를 프론트엔드 형식으로 변환
-      const formattedResults = data.results.map((result: any) => {
-        if (result.status === 'completed' && result.completionStats?.percentage > 5) {
-          return {
-            status: 'fulfilled',
-            value: result
-          };
-        } else {
-          return {
-            status: 'rejected',
-            reason: {
-              id: result.id,
-              title: result.title,
-              url: result.url,
-              status: 'failed',
-              error: result.geminiStatus || '분석 실패'
-            }
-          };
-        }
-      });
-      
-      setResults(formattedResults);
-
-      const successCount = formattedResults.filter((r: AnalysisResult) => r.status === 'fulfilled').length;
-      const failCount = formattedResults.filter((r: AnalysisResult) => r.status === 'rejected').length;
-      toast.success(`분석 완료! 성공: ${successCount}개, 실패: ${failCount}개`);
-    } else {
-      // 기존 형식 유지 (호환성)
-      setResults(data.results || []);
+    const targetVideos = videosToAnalyze || videos.filter(v => v.url.trim() !== '');
+    if (targetVideos.length === 0) {
+      setError("분석할 영상의 URL을 하나 이상 입력해주세요.");
+      setAnalysisStatus('input');
+      return;
     }
 
-    saveSession();
-  } catch (err: any) {
-    setError(err.message || '분석 요청 중 오류가 발생했습니다.');
-    toast.error(`분석 중 오류 발생: ${err.message || '네트워크 오류'}`);
-  } finally {
-    setAnalysisStatus('completed');
-    saveSession();
-  }
-};
+    try {
+      const response = await fetch('/api/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ videos: targetVideos }),
+      });
+
+      const data = await response.json().catch(async () => {
+        throw new Error(`서버 응답 오류: ${response.status}`);
+      });
+      
+      if (!response.ok) throw new Error(data.message || `서버 에러: ${response.status}`);
+      
+      // 백엔드 응답 형식을 프론트엔드 형식으로 변환
+      if (data.results && Array.isArray(data.results)) {
+        const formattedResults = data.results.map((result: any) => {
+          // 완성도 5% 이상이면 성공으로 처리
+          if (result.status === 'completed' && result.completionStats?.percentage > 5) {
+            return {
+              status: 'fulfilled',
+              value: {
+                id: result.id,
+                title: result.title,
+                url: result.url,
+                notes: result.notes || '',
+                status: 'completed',
+                analysis: result.analysis || {},
+                completionStats: result.completionStats || {
+                  completed: 0,
+                  incomplete: 156,
+                  total: 156,
+                  percentage: 0
+                },
+                scriptLanguage: result.scriptLanguage || 'none'
+              }
+            };
+          } else {
+            return {
+              status: 'rejected',
+              reason: {
+                id: result.id || 'unknown',
+                title: result.title || '알 수 없음',
+                url: result.url || '',
+                status: 'failed',
+                error: result.geminiStatus || result.error || '분석 실패'
+              }
+            };
+          }
+        });
+        
+        setResults(formattedResults);
+
+        const successCount = formattedResults.filter((r: AnalysisResult) => r.status === 'fulfilled').length;
+        const failCount = formattedResults.filter((r: AnalysisResult) => r.status === 'rejected').length;
+        
+        // Google Drive 업로드 상태 확인
+        if (data.upload?.success === false && data.upload?.error?.includes('storage')) {
+          toast.error('⚠️ Google Drive 용량 초과로 업로드 실패', { duration: 5000 });
+        }
+        
+        toast.success(`분석 완료! 성공: ${successCount}개, 실패: ${failCount}개`);
+      } else {
+        // 기존 형식 호환성 유지
+        setResults(data.results || []);
+      }
+
+      saveSession();
+    } catch (err: any) {
+      setError(err.message || '분석 요청 중 오류가 발생했습니다.');
+      toast.error(`분석 중 오류 발생: ${err.message || '네트워크 오류'}`);
+    } finally {
+      setAnalysisStatus('completed');
+      saveSession();
+      // 자동화 상태 재조회
+      fetchAutomationStats();
+    }
+  };
 
   const handleDownload = async () => {
     if (!selectedVideo || selectedVideo.status !== 'fulfilled') {
@@ -745,7 +767,7 @@ const handleAnalyze = async () => {
           
           <div className="text-center my-8">
             <Button 
-              onClick={handleAnalyze} 
+              onClick={() => handleAnalyze()} 
               size="lg"
               className="bg-green-600 hover:bg-green-700 text-white font-semibold px-8 py-3 text-lg transition-colors shadow-lg"
             >
