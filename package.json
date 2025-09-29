@@ -14,11 +14,17 @@
     "pm2:restart": "pm2 restart all",
     "pm2:logs": "pm2 logs",
     "scheduler:start": "node scripts/scheduler.js",
-    "analyze:batch": "node scripts/batch-analyzer.js"
+    "analyze:batch": "node scripts/batch-analyzer.js",
+    "sql:once": "node scripts/full-auto-scheduler-sql.js once",
+    "sql:schedule": "node scripts/full-auto-scheduler-sql.js schedule",
+    "sql:collect": "node scripts/full-auto-scheduler-sql.js collect",
+    "sql:analyze": "node scripts/full-auto-scheduler-sql.js analyze",
+    "sql:upload": "node scripts/full-auto-scheduler-sql.js upload",
+    "sql:status": "node scripts/full-auto-scheduler-sql.js status"
   },
   "dependencies": {
     "@google/generative-ai": "^0.1.3",
-    "axios": "^1.6.5",
+    "axios": "^1.7.2",
     "bottleneck": "^2.19.5",
     "dotenv": "^16.3.1",
     "google-auth-library": "^9.4.1",
@@ -30,13 +36,16 @@
     "react-dom": "^18",
     "react-hot-toast": "^2.4.1",
     "xlsx": "^0.18.5",
-    "zustand": "^4.4.7"
+    "zustand": "^4.4.7",
+    "recharts": "^2.12.7",
+    "better-sqlite3": "^11.7.0"
   },
   "devDependencies": {
     "@types/node": "^20",
     "@types/node-cron": "^3.0.11",
     "@types/react": "^18",
     "@types/react-dom": "^18",
+    "@types/better-sqlite3": "^7.6.11",
     "autoprefixer": "^10.0.1",
     "eslint": "^8",
     "eslint-config-next": "14.0.3",
