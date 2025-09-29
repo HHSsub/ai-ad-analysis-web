@@ -45,7 +45,7 @@ function getGeminiApiKeys(): string[] {
   return keys;
 }
 
-async function callGeminiWithFallback(prompt: string, apiKeys: string[]): Promise<string> {
+async function callGeminiWithFallback(prompt: string, apiKeys: string[]): Promise<{ success: boolean; text: string; error?: string }> {
   let lastError: any = null;
   
   for (let i = 0; i < apiKeys.length; i++) {
@@ -85,7 +85,7 @@ async function callGeminiWithFallback(prompt: string, apiKeys: string[]): Promis
       }
       
       console.log(`✅ ${keyLabel} 성공`);
-      return geminiText;
+      return { success: true, text: geminiText };
       
     } catch (error: any) {
       lastError = error;
@@ -94,24 +94,33 @@ async function callGeminiWithFallback(prompt: string, apiKeys: string[]): Promis
       
       console.error(`❌ ${keyLabel} 실패 (${statusCode || 'unknown'}): ${errorMessage}`);
       
-      // 429 에러가 아니면 즉시 중단
-      if (statusCode && statusCode !== 429) {
-        console.log('⚠️ 429 에러가 아닌 다른 오류 발생. fallback 중단.');
-        throw error;
-      }
-      
-      // 마지막 키가 아니면 다음 키로 계속
-      if (i < apiKeys.length - 1) {
-        console.log(`⏭️ 다음 API 키로 fallback 시도...`);
-        await new Promise(resolve => setTimeout(resolve, 1000)); // 1초 대기
-        continue;
+      // 429 에러인 경우 다음 키로 시도
+      if (statusCode === 429) {
+        if (i < apiKeys.length - 1) {
+          console.log(`⏭️ 다음 API 키로 fallback 시도...`);
+          await new Promise(resolve => setTimeout(resolve, 1000)); // 1초 대기
+          continue;
+        } else {
+          // 모든 키가 429 에러
+          return { success: false, text: '', error: 'AI할당량초과' };
+        }
+      } else if (statusCode === 401 || statusCode === 403) {
+        // API 키 문제
+        return { success: false, text: '', error: 'AI키문제' };
+      } else {
+        // 기타 에러
+        return { success: false, text: '', error: `AI오류/${statusCode || 'unknown'}` };
       }
     }
   }
   
   // 모든 키 실패
   console.error('❌ 모든 Gemini API 키 사용 실패');
-  throw lastError || new Error('All Gemini API keys failed');
+  const errorMsg = lastError?.message || 'All API keys failed';
+  if (errorMsg.includes('quota') || errorMsg.includes('429')) {
+    return { success: false, text: '', error: 'AI할당량초과' };
+  }
+  return { success: false, text: '', error: 'AI분석실패' };
 }
 // ===== 🔑 GEMINI API KEY FALLBACK 로직 추가 끝 =====
 
@@ -484,7 +493,7 @@ Provide your analysis in JSON format with exactly these keys:
 `.trim();
 }
 
-// --- YouTube 메타데이터 기반 추론 ---
+// --- YouTube 메타데이터 기반 추론 (수정: 더 많은 피처 채우기) ---
 function inferFeaturesFromYouTubeMetadata(videoData: any, features: Feature[]): any {
   const { snippet, statistics, contentDetails } = videoData;
   const result: any = {};
@@ -492,45 +501,64 @@ function inferFeaturesFromYouTubeMetadata(videoData: any, features: Feature[]): 
   features.forEach(feature => {
     const featureKey = `feature_${feature.No}`;
     
-    switch (feature.Feature) {
-      case '영상 제목':
-        result[featureKey] = snippet?.title || 'N/A';
-        break;
-      case '채널명':
-        result[featureKey] = snippet?.channelTitle || 'N/A';
-        break;
-      case '조회수':
-        result[featureKey] = statistics?.viewCount ? parseInt(statistics.viewCount).toLocaleString() : 'N/A';
-        break;
-      case '좋아요 수':
-        result[featureKey] = statistics?.likeCount ? parseInt(statistics.likeCount).toLocaleString() : 'N/A';
-        break;
-      case '댓글 수':
-        result[featureKey] = statistics?.commentCount ? parseInt(statistics.commentCount).toLocaleString() : 'N/A';
-        break;
-      case '전체 영상 길이':
-        if (contentDetails?.duration) {
-          const duration = contentDetails.duration;
-          const match = duration.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
-          if (match) {
-            const [, hours = '0', minutes = '0', seconds = '0'] = match;
-            const totalSeconds = parseInt(hours) * 3600 + parseInt(minutes) * 60 + parseInt(seconds);
-            result[featureKey] = `${totalSeconds}초`;
-          }
+    // 영상 제목 관련
+    if (feature.Feature === '영상 제목' || feature.Feature.includes('제목')) {
+      result[featureKey] = snippet?.title || 'N/A';
+    }
+    // 채널명 관련
+    else if (feature.Feature === '채널명' || feature.Feature.includes('채널')) {
+      result[featureKey] = snippet?.channelTitle || 'N/A';
+    }
+    // 조회수 관련
+    else if (feature.Feature === '조회수' || feature.Feature.includes('조회')) {
+      result[featureKey] = statistics?.viewCount ? parseInt(statistics.viewCount).toLocaleString() : '0';
+    }
+    // 좋아요 수 관련
+    else if (feature.Feature === '좋아요 수' || feature.Feature.includes('좋아요')) {
+      result[featureKey] = statistics?.likeCount ? parseInt(statistics.likeCount).toLocaleString() : '0';
+    }
+    // 댓글 수 관련
+    else if (feature.Feature === '댓글 수' || feature.Feature.includes('댓글')) {
+      result[featureKey] = statistics?.commentCount ? parseInt(statistics.commentCount).toLocaleString() : '0';
+    }
+    // 영상 길이 관련
+    else if (feature.Feature === '전체 영상 길이' || feature.Feature.includes('영상 길이')) {
+      if (contentDetails?.duration) {
+        const duration = contentDetails.duration;
+        const match = duration.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+        if (match) {
+          const [, hours = '0', minutes = '0', seconds = '0'] = match;
+          const totalSeconds = parseInt(hours) * 3600 + parseInt(minutes) * 60 + parseInt(seconds);
+          result[featureKey] = `${totalSeconds}초`;
         }
-        break;
-      case '광고 여부':
-        const title = snippet?.title?.toLowerCase() || '';
-        const desc = snippet?.description?.toLowerCase() || '';
-        result[featureKey] = title.includes('광고') || title.includes('ad') || 
-                           desc.includes('광고') || desc.includes('sponsored') ? 
-                           '있음' : '없음';
-        break;
-      case '게시일':
-        if (snippet?.publishedAt) {
-          result[featureKey] = new Date(snippet.publishedAt).toLocaleDateString();
-        }
-        break;
+      }
+    }
+    // 광고 여부 판단
+    else if (feature.Feature.includes('광고')) {
+      const title = snippet?.title?.toLowerCase() || '';
+      const desc = snippet?.description?.toLowerCase() || '';
+      result[featureKey] = (title.includes('광고') || title.includes('ad') || 
+                           title.includes('#ad') || desc.includes('광고') || 
+                           desc.includes('sponsored')) ? '있음' : '추정없음';
+    }
+    // 게시일/업로드 날짜
+    else if (feature.Feature.includes('게시일') || feature.Feature.includes('업로드')) {
+      if (snippet?.publishedAt) {
+        result[featureKey] = new Date(snippet.publishedAt).toLocaleDateString('ko-KR');
+      }
+    }
+    // 설명문
+    else if (feature.Feature.includes('설명')) {
+      result[featureKey] = snippet?.description ? 
+        snippet.description.substring(0, 100) + '...' : 'N/A';
+    }
+    // 태그
+    else if (feature.Feature.includes('태그')) {
+      result[featureKey] = snippet?.tags ? snippet.tags.slice(0, 5).join(', ') : 'N/A';
+    }
+    // 썸네일
+    else if (feature.Feature.includes('썸네일')) {
+      result[featureKey] = snippet?.thumbnails?.default ? '있음' : 'N/A';
     }
   });
   
@@ -538,7 +566,7 @@ function inferFeaturesFromYouTubeMetadata(videoData: any, features: Feature[]): 
 }
 
 // --- Gemini 응답 파싱 (안전한 에러 처리) ---
-function parseAndValidateResponse(text: string, features: Feature[]): any {
+function parseAndValidateResponse(text: string, features: Feature[], errorReason?: string): any {
   try {
     console.log('🔍 Gemini 응답 파싱 시작');
     
@@ -568,7 +596,7 @@ function parseAndValidateResponse(text: string, features: Feature[]): any {
     const result: any = {};
     features.forEach(feature => {
       const featureKey = `feature_${feature.No}`;
-      result[featureKey] = parsed[featureKey] || '분석불가/AI응답누락';
+      result[featureKey] = parsed[featureKey] || `분석불가/${errorReason || 'AI응답누락'}`;
     });
     
     const analysisFailureCount = Object.values(result).filter(value => 
@@ -583,11 +611,11 @@ function parseAndValidateResponse(text: string, features: Feature[]): any {
   } catch (error) {
     console.error('❌ Gemini 응답 파싱 완전 실패:', error);
     
-    // 완전 실패시 기본값으로 채우기
+    // 완전 실패시 에러 원인 표시
     const fallbackResult: any = {};
     features.forEach(feature => {
       const featureKey = `feature_${feature.No}`;
-      fallbackResult[featureKey] = '분석불가/파싱실패';
+      fallbackResult[featureKey] = `분석불가/${errorReason || '파싱실패'}`;
     });
     
     return fallbackResult;
@@ -607,7 +635,7 @@ function calculateCompletionStats(analysis: any) {
         strValue.startsWith('분석불가/') || 
         strValue.startsWith('판단불가/') || 
         strValue === '' || 
-        strValue === '0') {
+        (strValue === '0' && !strValue.includes('초'))) {
       incomplete++;
     } else {
       completed++;
@@ -678,40 +706,63 @@ async function analyzeSingleVideo(video: VideoInput, features: Feature[], youtub
   // 2. 자막 추출
   const scriptData = await extractSubtitles(videoId);
 
-  // 3. YouTube 메타데이터 기반 기본 추론
+  // 3. YouTube 메타데이터 기반 기본 추론 (중요: 먼저 채우기)
   const baseInferences = inferFeaturesFromYouTubeMetadata(videoData, features);
+  console.log(`📊 YouTube 메타데이터로 ${Object.keys(baseInferences).length}개 피처 채움`);
 
   // 4. Gemini AI 고급 분석 (fallback 키 사용)
   let analysisResults = {};
+  let geminiErrorReason = '';
+  
   try {
     const prompt = createExpertAnalysisPrompt(videoData, features, scriptData);
     console.log(`🤖 Gemini AI 분석 시작... (프롬프트 길이: ${prompt.length}자)`);
     
     // ===== 🔑 여기서 callGeminiWithFallback 함수 사용 =====
-    const geminiText = await callGeminiWithFallback(prompt, apiKeys);
+    const geminiResult = await callGeminiWithFallback(prompt, apiKeys);
     
-    if (!geminiText || geminiText.trim().length === 0) {
-      throw new Error('Gemini AI가 빈 응답을 반환했습니다');
+    if (geminiResult.success && geminiResult.text) {
+      analysisResults = parseAndValidateResponse(geminiResult.text, features);
+      console.log('✅ Gemini AI 분석 완료');
+    } else {
+      // Gemini 실패 - 에러 원인 표시
+      geminiErrorReason = geminiResult.error || 'AI분석실패';
+      console.log(`📝 Gemini 분석 실패 (${geminiErrorReason}) - YouTube 메타데이터만으로 진행`);
+      
+      features.forEach(feature => {
+        const featureKey = `feature_${feature.No}`;
+        if (!baseInferences[featureKey]) {
+          analysisResults[featureKey] = `분석불가/${geminiErrorReason}`;
+        }
+      });
     }
     
-    analysisResults = parseAndValidateResponse(geminiText, features);
-    console.log('✅ Gemini AI 분석 완료');
+  } catch (geminiError: any) {
+    console.error('❌ Gemini AI 분석 예외 발생:', geminiError);
     
-  } catch (geminiError) {
-    console.error('❌ Gemini AI 분석 실패:', geminiError);
-    console.log('📝 YouTube 메타데이터만으로 분석 진행');
+    // 에러 타입 판단
+    const errorMessage = geminiError?.message || '';
+    if (errorMessage.includes('quota') || errorMessage.includes('429')) {
+      geminiErrorReason = 'AI할당량초과';
+    } else if (errorMessage.includes('401') || errorMessage.includes('403') || errorMessage.includes('API key')) {
+      geminiErrorReason = 'AI키문제';
+    } else {
+      geminiErrorReason = 'AI오류';
+    }
     
-    // Gemini 실패시 기본 추론만 사용
+    console.log(`📝 YouTube 메타데이터만으로 분석 진행 (${geminiErrorReason})`);
+    
+    // Gemini 실패시 나머지 피처들 에러 표시
     features.forEach(feature => {
       const featureKey = `feature_${feature.No}`;
       if (!baseInferences[featureKey]) {
-        analysisResults[featureKey] = '분석불가/AI분석실패';
+        analysisResults[featureKey] = `분석불가/${geminiErrorReason}`;
       }
     });
   }
 
-  // 5. 기본 추론과 AI 분석 결과 병합
-  const finalAnalysis = { ...baseInferences, ...analysisResults };
+  // 5. 기본 추론과 AI 분석 결과 병합 (YouTube 메타데이터 우선)
+  const finalAnalysis = { ...analysisResults, ...baseInferences };
 
   // 6. 카테고리별로 분석 결과 재구성
   const categorizedAnalysis: { [category: string]: { [feature: string]: string } } = {};
@@ -731,11 +782,12 @@ async function analyzeSingleVideo(video: VideoInput, features: Feature[], youtub
     title: video.title,
     url: video.url,
     notes: video.notes,
-    status: 'completed',
+    status: completionStats.percentage > 5 ? 'completed' : 'failed',
     analysis: categorizedAnalysis,
     features: finalAnalysis,
     completionStats,
     scriptLanguage: scriptData.language,
+    geminiStatus: geminiErrorReason || 'success'
   };
 }
 
@@ -768,9 +820,10 @@ export async function POST(request: NextRequest) {
     // ===== 🔑 Gemini API 키 목록 로드 =====
     const geminiApiKeys = getGeminiApiKeys();
     if (geminiApiKeys.length === 0) {
-      throw new Error('GEMINI_API_KEY 환경변수가 설정되지 않았습니다.');
+      console.log('⚠️ GEMINI_API_KEY 환경변수가 설정되지 않았습니다. AI 분석 스킵');
+    } else {
+      console.log('✅ Gemini AI 초기화 완료');
     }
-    console.log('✅ Gemini AI 초기화 완료');
 
     // 진행률 초기화
     const sessionId = `analysis_${Date.now()}`;
@@ -818,7 +871,8 @@ export async function POST(request: NextRequest) {
           analysis: {},
           features: {},
           completionStats: { completed: 0, incomplete: 156, total: 156, percentage: 0 },
-          scriptLanguage: 'none'
+          scriptLanguage: 'none',
+          geminiStatus: 'error'
         });
         
         global.analysisProgress.completed = i + 1;
