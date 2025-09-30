@@ -514,22 +514,7 @@ async function analyzeSingleVideo(video: VideoInput, features: Feature[], youtub
       categorizedAnalysis[feature.Category][feature.Feature] = value;
     });
 
-    // ✅ 하이브리드 점수 계산
-    const hybridScore = calculateHybridScore({
-      youtubeData: {
-        viewCount: parseInt(videoData.statistics?.viewCount || '0'),
-        likeCount: parseInt(videoData.statistics?.likeCount || '0'),
-        commentCount: parseInt(videoData.statistics?.commentCount || '0'),
-        duration: videoData.contentDetails?.duration || '',
-        channelTitle: videoData.snippet?.channelTitle || '',
-        publishedAt: videoData.snippet?.publishedAt || '',
-        description: videoData.snippet?.description || '',
-        tags: videoData.snippet?.tags || [],
-        categoryId: videoData.snippet?.categoryId || ''
-      },
-      features: bestAnalysis.analysisResult
-    });
-
+    // ✅ analyzedVideo 객체 먼저 생성
     const analyzedVideo: AnalyzedVideo = { 
       id: videoId, 
       title: video.title,
@@ -551,10 +536,13 @@ async function analyzeSingleVideo(video: VideoInput, features: Feature[], youtub
         tags: videoData.snippet?.tags || [],
         categoryId: videoData.snippet?.categoryId || ''
       },
-      hybridScore,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
+    
+    // ✅ 이제 완성된 객체로 하이브리드 점수 계산
+    const hybridScore = calculateHybridScore(analyzedVideo);
+    analyzedVideo.hybridScore = hybridScore;
 
     // ✅ DB에 완전한 분석 결과 저장
     db.saveAnalysisResult(analyzedVideo);
