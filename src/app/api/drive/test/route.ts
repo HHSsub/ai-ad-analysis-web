@@ -1,25 +1,18 @@
-// src/app/api/drive/test/route.ts - 완전 수정
+// src/app/api/drive/test/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { google } from 'googleapis';
 import { JWT } from 'google-auth-library';
 
-// 폴더 ID 정리 함수
 function cleanFolderId(folderId: string): string {
   let cleaned = folderId.trim();
-  
-  // 끝에 있는 점(.) 제거 - 핵심 수정!
   cleaned = cleaned.replace(/\.$/, '');
-  
-  // URL에서 폴더 ID 추출
   const folderMatch = cleaned.match(/\/folders\/([a-zA-Z0-9_-]+)/);
   if (folderMatch) {
     cleaned = folderMatch[1];
   }
-  
   return cleaned;
 }
 
-// Google Drive 인증 설정
 function createAuthClient() {
   const serviceAccountJson = process.env.GOOGLE_SERVICE_ACCOUNT_CREDENTIALS;
   let credentials: any;
@@ -41,23 +34,34 @@ function createAuthClient() {
     throw new Error('Google Drive 서비스 계정 환경변수가 설정되지 않았습니다');
   }
 
-  return new JWT({
+  const impersonateUser = process.env.GOOGLE_WORKSPACE_ADMIN_EMAIL;
+  
+  const authConfig: any = {
     email: credentials.client_email,
     key: credentials.private_key,
     scopes: [
       'https://www.googleapis.com/auth/drive',
       'https://www.googleapis.com/auth/drive.file'
     ],
-  });
+  };
+
+  if (impersonateUser) {
+    authConfig.subject = impersonateUser;
+    console.log(`🔐 Impersonate: ${impersonateUser}`);
+  } else {
+    console.warn('⚠️ GOOGLE_WORKSPACE_ADMIN_EMAIL 미설정');
+  }
+
+  return new JWT(authConfig);
 }
 
 export async function GET(req: NextRequest) {
   try {
     console.log('🧪 Google Drive 연결 테스트 시작...');
 
-    // 1. 환경변수 확인
     const RAW_FOLDER_ID = process.env.GOOGLE_DRIVE_FOLDER_ID;
     const CLIENT_EMAIL = process.env.GOOGLE_DRIVE_CLIENT_EMAIL;
+    const IMPERSONATE_USER = process.env.GOOGLE_WORKSPACE_ADMIN_EMAIL;
     
     if (!RAW_FOLDER_ID) {
       return NextResponse.json({
@@ -75,42 +79,46 @@ export async function GET(req: NextRequest) {
       }, { status: 500 });
     }
 
-    // 2. 폴더 ID 정리
     const FOLDER_ID = cleanFolderId(RAW_FOLDER_ID);
     
     console.log(`📁 원본 폴더 ID: ${RAW_FOLDER_ID}`);
     console.log(`📁 정리된 폴더 ID: ${FOLDER_ID}`);
     console.log(`🔐 서비스 계정: ${CLIENT_EMAIL}`);
+    console.log(`👤 Impersonate: ${IMPERSONATE_USER || '미설정'}`);
 
-    // 3. 인증 클라이언트 생성
     const auth = createAuthClient();
     await auth.authorize();
     
     console.log('✅ Google Drive 인증 성공');
 
-    // 4. Drive API 클라이언트 생성
     const drive = google.drive({ version: 'v3', auth });
 
-    // 5. 폴더 존재 및 권한 확인
     try {
       const folderResponse = await drive.files.get({
         fileId: FOLDER_ID,
-        fields: 'id, name, permissions'
+        fields: 'id, name, permissions, driveId',
+        supportsAllDrives: true
       });
       
       console.log(`✅ 폴더 접근 성공: ${folderResponse.data.name}`);
+      
+      if (folderResponse.data.driveId) {
+        console.log(`📁 공유 드라이브 ID: ${folderResponse.data.driveId}`);
+      }
+      
     } catch (folderError: any) {
       console.error('❌ 폴더 접근 실패:', folderError.message);
       
       if (folderError.message?.includes('File not found')) {
         return NextResponse.json({
           success: false,
-          message: `폴더를 찾을 수 없습니다. 폴더 ID(${FOLDER_ID})를 확인하거나 서비스 계정(${CLIENT_EMAIL})에 폴더 접근 권한을 부여하세요.`,
+          message: `폴더를 찾을 수 없습니다. ${IMPERSONATE_USER ? `${IMPERSONATE_USER}가 폴더 접근 권한이 있는지 확인하세요.` : 'GOOGLE_WORKSPACE_ADMIN_EMAIL을 설정하세요.'}`,
           errorType: 'folder_not_found',
           details: {
             originalFolderId: RAW_FOLDER_ID,
             cleanedFolderId: FOLDER_ID,
-            serviceAccount: CLIENT_EMAIL
+            serviceAccount: CLIENT_EMAIL,
+            impersonateUser: IMPERSONATE_USER || '미설정'
           }
         }, { status: 404 });
       }
@@ -118,19 +126,19 @@ export async function GET(req: NextRequest) {
       throw folderError;
     }
 
-    // 6. 파일 목록 조회 테스트
     const listResponse = await drive.files.list({
       q: `'${FOLDER_ID}' in parents and trashed = false`,
       fields: 'files(id, name, createdTime)',
-      pageSize: 5
+      pageSize: 5,
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true
     });
 
     const fileCount = listResponse.data.files?.length || 0;
     console.log(`📂 폴더 내 파일 수: ${fileCount}개`);
 
-    // 7. 테스트 파일 생성 시도
     const testFileName = `drive_test_${Date.now()}.txt`;
-    const testContent = `Google Drive 연결 테스트\n생성 시간: ${new Date().toISOString()}\n서비스 계정: ${CLIENT_EMAIL}`;
+    const testContent = `Google Drive 연결 테스트\n생성 시간: ${new Date().toISOString()}\n서비스 계정: ${CLIENT_EMAIL}\nImpersonate: ${IMPERSONATE_USER}`;
 
     const createResponse = await drive.files.create({
       requestBody: {
@@ -142,13 +150,14 @@ export async function GET(req: NextRequest) {
         body: testContent,
       },
       fields: 'id, name, webViewLink',
+      supportsAllDrives: true
     });
 
     console.log(`✅ 테스트 파일 생성 성공: ${testFileName}`);
 
-    // 8. 테스트 파일 삭제 (정리)
     await drive.files.delete({
-      fileId: createResponse.data.id!
+      fileId: createResponse.data.id!,
+      supportsAllDrives: true
     });
 
     console.log(`🗑️ 테스트 파일 삭제 완료`);
@@ -160,6 +169,7 @@ export async function GET(req: NextRequest) {
         originalFolderId: RAW_FOLDER_ID,
         cleanedFolderId: FOLDER_ID,
         serviceAccount: CLIENT_EMAIL,
+        impersonateUser: IMPERSONATE_USER,
         folderFileCount: fileCount,
         testFileName: testFileName,
         canCreate: true,
@@ -176,8 +186,11 @@ export async function GET(req: NextRequest) {
     if (error.message?.includes('invalid_grant')) {
       errorMessage = 'Google 서비스 계정 인증 실패: private_key나 client_email을 확인하세요.';
       errorType = 'auth_failed';
+    } else if (error.message?.includes('unauthorized_client')) {
+      errorMessage = 'Domain-Wide Delegation 설정이 필요합니다. Google Admin Console에서 Client ID와 Scope를 확인하세요.';
+      errorType = 'delegation_not_configured';
     } else if (error.message?.includes('File not found')) {
-      errorMessage = `폴더를 찾을 수 없습니다. 폴더 ID(${process.env.GOOGLE_DRIVE_FOLDER_ID})를 확인하거나 서비스 계정(${process.env.GOOGLE_DRIVE_CLIENT_EMAIL})에 폴더 접근 권한을 부여하세요.`;
+      errorMessage = `폴더를 찾을 수 없습니다. 폴더 ID(${process.env.GOOGLE_DRIVE_FOLDER_ID})를 확인하거나 ${process.env.GOOGLE_WORKSPACE_ADMIN_EMAIL}가 폴더 접근 권한이 있는지 확인하세요.`;
       errorType = 'folder_not_found';
     } else if (error.message?.includes('insufficientPermissions')) {
       errorMessage = '권한 부족: 서비스 계정에 폴더 편집 권한을 부여하세요.';
@@ -197,6 +210,7 @@ export async function GET(req: NextRequest) {
       environment: {
         folderId: process.env.GOOGLE_DRIVE_FOLDER_ID,
         serviceAccount: process.env.GOOGLE_DRIVE_CLIENT_EMAIL,
+        impersonateUser: process.env.GOOGLE_WORKSPACE_ADMIN_EMAIL,
         hasCredentials: !!process.env.GOOGLE_SERVICE_ACCOUNT_CREDENTIALS
       }
     }, { status: 500 });
