@@ -1,6 +1,6 @@
-// src/app/api/drive/upload-sql/route.ts - DB를 Drive에 업로드
+// src/app/api/drive/upload-sql/route.ts - 올바른 import로 수정
 import { NextRequest, NextResponse } from 'next/server';
-import { getGlobalDriveManager } from '@/lib/google-drive';
+import { uploadDatabaseToCSV, testGoogleDriveConnection } from '@/lib/google-drive';
 import { getGlobalDB } from '@/lib/sql-database';
 
 export async function POST(request: NextRequest) {
@@ -37,14 +37,13 @@ export async function POST(request: NextRequest) {
 
     console.log(`📊 업로드할 데이터: ${stats.completed}개 완료된 분석`);
 
-    // Drive 매니저 초기화 및 업로드
-    const driveManager = getGlobalDriveManager();
-    const uploadUrl = await driveManager.uploadDatabaseCSV();
+    // Drive 업로드 실행
+    const uploadResult = await uploadDatabaseToCSV();
 
-    if (!uploadUrl) {
+    if (!uploadResult.success) {
       return NextResponse.json({
         error: 'Upload failed',
-        message: 'Failed to upload CSV to Google Drive'
+        message: uploadResult.message || 'Failed to upload CSV to Google Drive'
       }, { status: 500 });
     }
 
@@ -54,7 +53,8 @@ export async function POST(request: NextRequest) {
     const response = {
       success: true,
       message: 'CSV uploaded to Google Drive successfully',
-      uploadUrl,
+      uploadUrl: uploadResult.fileUrl,
+      fileName: uploadResult.fileName,
       timestamp: new Date().toISOString(),
       stats: {
         total_videos: finalStats.total,
@@ -65,7 +65,7 @@ export async function POST(request: NextRequest) {
       }
     };
 
-    console.log(`✅ Drive 업로드 완료: ${uploadUrl}`);
+    console.log(`✅ Drive 업로드 완료: ${uploadResult.fileUrl}`);
     return NextResponse.json(response);
 
   } catch (error: any) {
@@ -80,17 +80,17 @@ export async function POST(request: NextRequest) {
 export async function GET(request: NextRequest) {
   try {
     // Drive 연결 상태 테스트
-    const driveManager = getGlobalDriveManager();
-    const accessible = await driveManager.testFolderAccess();
+    const driveTest = await testGoogleDriveConnection();
 
     const db = getGlobalDB();
     const stats = db.getStatistics();
 
     return NextResponse.json({
-      drive_accessible: accessible,
+      drive_accessible: driveTest.success,
+      drive_message: driveTest.message,
       database_stats: stats,
-      ready_for_upload: accessible && stats.completed > 0,
-      message: accessible ? 
+      ready_for_upload: driveTest.success && stats.completed > 0,
+      message: driveTest.success ? 
         'Google Drive is accessible and ready for upload' : 
         'Google Drive access failed - check folder permissions'
     });
