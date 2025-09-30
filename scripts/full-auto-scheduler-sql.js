@@ -113,7 +113,7 @@ async function analyzeVideos() {
         const response = await axios.post(`${API_URL}/api/analyze`, 
           { videos },
           { 
-            timeout: 36000000,
+            timeout: 3600000,
             headers: { 'Content-Type': 'application/json' }
           }
         );
