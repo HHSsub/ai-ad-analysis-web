@@ -109,6 +109,9 @@ const AnalysisProgress: React.FC = () => {
                     <Loader2 className="w-5 h-5 text-blue-600" />
                   </div>
                 )}
+                {video.status === 'incomplete' && (
+                  <XCircle className="w-5 h-5 text-yellow-600" />
+                )}
                 <div>
                   <p className="font-medium text-gray-900">{video.title}</p>
                   {video.error && (
