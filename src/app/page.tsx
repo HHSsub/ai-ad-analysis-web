@@ -554,7 +554,7 @@ export default function Home() {
               <div className="inline-block mb-6">
                 <div className="flex items-center justify-center space-x-2 px-4 py-2 bg-blue-500/10 border border-blue-500/30 rounded-full">
                   <Sparkles className="h-4 w-4 text-blue-400" />
-                  <span className="text-sm text-blue-300 font-medium">AI-Powered Ad Analysis</span>
+                  <span className="text-sm text-blue-300 font-medium">Powered by Nexad</span>
                 </div>
               </div>
               
@@ -565,9 +565,9 @@ export default function Home() {
               </h2>
               
               <p className="text-xl md:text-2xl text-gray-400 mb-12 max-w-3xl mx-auto leading-relaxed">
-                YouTube 광고 영상을 <span className="text-blue-400 font-semibold">156가지 피처</span>로 심층 분석하는
+                <span className="text-blue-400 font-semibold">NEXAD</span>
                 <br />
-                AI 기반 프리미엄 분석 엔진
+                AI 기반 광고 분석
               </p>
 
               <div className="flex justify-center space-x-6 mb-16">
