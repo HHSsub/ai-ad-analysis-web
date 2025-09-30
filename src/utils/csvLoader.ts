@@ -1,4 +1,4 @@
-// src/utils/csvLoader.ts - CSV에서 156개 특성 로드 (단일 진실의 원천)
+// src/utils/csvLoader.ts - CSV에서 156개 특성 로드
 
 import * as fs from 'fs';
 import * as path from 'path';
@@ -12,7 +12,6 @@ export interface VideoFeature {
 let cachedFeatures: VideoFeature[] | null = null;
 
 export function loadFeaturesFromCSV(): VideoFeature[] {
-  // 캐시된 데이터가 있으면 반환
   if (cachedFeatures && cachedFeatures.length === 156) {
     return cachedFeatures;
   }
@@ -25,7 +24,6 @@ export function loadFeaturesFromCSV(): VideoFeature[] {
 
   let fileContent = fs.readFileSync(csvPath, 'utf-8');
 
-  // BOM 제거
   if (fileContent.charCodeAt(0) === 0xFEFF) {
     fileContent = fileContent.slice(1);
   }
@@ -36,14 +34,12 @@ export function loadFeaturesFromCSV(): VideoFeature[] {
 
   const features: VideoFeature[] = [];
 
-  // 헤더 스킵 (첫 줄)
   for (let i = 1; i < lines.length; i++) {
     const columns = parseCsvLine(lines[i]);
 
     if (columns.length >= 3) {
       const [no, category, item] = columns.map(col => col.trim());
 
-      // 유효한 데이터만 추가
       if (no && category && item && !isNaN(parseInt(no))) {
         features.push({
           no: no,
@@ -54,7 +50,6 @@ export function loadFeaturesFromCSV(): VideoFeature[] {
     }
   }
 
-  // 156개 검증
   if (features.length !== 156) {
     console.warn(`⚠️ CSV 특성 개수 불일치: ${features.length}/156`);
   }
@@ -92,7 +87,6 @@ function parseCsvLine(line: string): string[] {
   return result;
 }
 
-// 클라이언트 사이드용 (서버에서만 동작)
 export function getFeaturesSync(): VideoFeature[] {
   if (typeof window !== 'undefined') {
     throw new Error('CSV는 서버 사이드에서만 로드 가능합니다');
