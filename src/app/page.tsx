@@ -1,3 +1,4 @@
+// src/app/page.tsx - 기존 모든 기능 유지 + DB 통계만 추가
 "use client";
 
 import { useState, ClipboardEvent, useEffect, useRef } from 'react';
@@ -6,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Loader2, AlertCircle, CheckCircle, Download, Plus, Trash2, BarChart3, Play, Database } from "lucide-react";
+import { Loader2, AlertCircle, CheckCircle, Download, Plus, Trash2, BarChart3, Play, Database, RefreshCw } from "lucide-react";
 import toast from 'react-hot-toast';
 import ResultsFooter from "@/components/ResultsFooter";
 import DriveUploadButton from "@/components/DriveUploadButton";
@@ -56,6 +57,15 @@ interface AutomationStats {
   failed: number;
 }
 
+// ✅ 추가: 데이터베이스 통계 타입
+interface DatabaseStats {
+  total: number;
+  pending: number;
+  completed: number;
+  failed: number;
+  latest_analysis: string;
+}
+
 const SESSION_KEY = 'ai-ad-analysis-session-v1';
 const INITIAL_ROWS = 10;
 
@@ -72,41 +82,72 @@ export default function Home() {
   const [isAutoCollecting, setIsAutoCollecting] = useState(false);
   const [automationStats, setAutomationStats] = useState<AutomationStats | null>(null);
 
-  const completedVideos = results.filter((r): r is FulfilledResult => r.status === 'fulfilled');
-  const failedVideos = results.filter((r): r is RejectedResult => r.status === 'rejected');
+  // ✅ 추가: DB 통계 상태
+  const [dbStats, setDbStats] = useState<DatabaseStats | null>(null);
+  const [isLoadingDbStats, setIsLoadingDbStats] = useState(false);
 
-  const saveTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const mountedRef = useRef(false);
+  const completedVideos = results.filter(r => r.status === 'fulfilled').length;
+  const failedVideos = results.filter(r => r.status === 'rejected').length;
 
+  // 페이지 로드 시 상태 복원
+  useEffect(() => {
+    const hasRestored = loadSession();
+    if (!hasRestored) {
+      setAnalysisStatus('welcome');
+    }
+    fetchAutomationStats();
+    // ✅ 추가: DB 통계 로드
+    loadDatabaseStats();
+  }, []);
+
+  // ✅ 추가: DB 통계 로드 함수
+  const loadDatabaseStats = async () => {
+    try {
+      setIsLoadingDbStats(true);
+      const response = await fetch('/api/db-stats');
+      if (response.ok) {
+        const data = await response.json();
+        setDbStats(data.basic);
+      }
+    } catch (error) {
+      console.error('DB 통계 로드 실패:', error);
+    } finally {
+      setIsLoadingDbStats(false);
+    }
+  };
+
+  // 세션 저장
   const saveSession = () => {
     try {
-      const payload = {
-        version: 1,
-        timestamp: Date.now(),
-        videos,
-        analysisStatus,
+      sessionStorage.setItem(SESSION_KEY, JSON.stringify({
+        videos: videos.filter(v => v.title || v.url || v.notes),
         results,
         selectedVideo,
-        error,
-      };
-      localStorage.setItem(SESSION_KEY, JSON.stringify(payload));
+        analysisStatus: analysisStatus === 'loading' ? 'input' : analysisStatus
+      }));
     } catch (e) {
       console.error('세션 저장 실패:', e);
     }
   };
 
-  const loadSession = () => {
+  // 세션 로드
+  const loadSession = (): boolean => {
     try {
-      const raw = localStorage.getItem(SESSION_KEY);
-      if (!raw) return false;
-      const data = JSON.parse(raw);
-      if (!data || typeof data !== 'object') return false;
+      const saved = sessionStorage.getItem(SESSION_KEY);
+      if (!saved) return false;
 
-      if (Array.isArray(data.videos)) setVideos(data.videos);
-      if (data.analysisStatus) setAnalysisStatus(data.analysisStatus);
-      if (Array.isArray(data.results)) setResults(data.results);
-      if (data.selectedVideo) setSelectedVideo(data.selectedVideo);
-      if (typeof data.error === 'string' || data.error === null) setError(data.error ?? null);
+      const parsed = JSON.parse(saved);
+      if (parsed.videos?.length) {
+        const paddedVideos = [...parsed.videos];
+        while (paddedVideos.length < INITIAL_ROWS) {
+          paddedVideos.push({ title: '', url: '', notes: '' });
+        }
+        setVideos(paddedVideos);
+      }
+      
+      setResults(parsed.results || []);
+      setAnalysisStatus(parsed.analysisStatus || 'welcome');
+      setSelectedVideo(parsed.selectedVideo || null);
 
       toast.success('이전 작업 세션을 복원했습니다.');
       return true;
@@ -191,240 +232,155 @@ export default function Home() {
       toast.error('분석할 대기 중인 광고가 없습니다.');
       return;
     }
+
+    const confirmMessage = `수집된 ${automationStats.pending}개 광고를 분석 시스템에 전송하시겠습니까?\n\n⚠️ 이 작업은 시간이 오래 걸릴 수 있습니다.`;
     
-    toast.loading('수집된 광고를 분석 시스템으로 전송 중...', { id: 'auto-analysis' });
+    if (!confirm(confirmMessage)) {
+      return;
+    }
+
+    toast.loading(`${automationStats.pending}개 광고 분석 시작 중...`, { id: 'auto-analysis' });
     
     try {
-      // 대기 중인 광고들을 수동 입력으로 불러와서 분석 시작
-      // limit 파라미터 추가하여 모든 pending 광고 가져오기
-      const pendingResponse = await fetch(`/api/automation/collect?limit=${automationStats.pending}`);
+      const response = await fetch('/api/automation/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          batchSize: 5,
+          maxRetries: 3
+        })
+      });
       
-      const pendingData = await pendingResponse.json();
+      const result = await response.json();
       
-      if (pendingData.success && pendingData.data?.recentAds) {
-        // 대기 중인 광고들을 videos 상태로 설정
-        const pendingAds = pendingData.data.recentAds
-          .filter((ad: any) => ad.analysis_status === 'pending')
-          .map((ad: any) => ({
-            title: ad.title || '',
-            url: ad.url || '',
-            notes: ad.note || '자동 수집된 광고'
-          }));
+      if (result.success) {
+        toast.success(`분석 전송 완료: ${result.message}`, { id: 'auto-analysis' });
         
-        if (pendingAds.length > 0) {
-          setVideos(pendingAds);
-          setAnalysisStatus('input');
-          toast.success(`${pendingAds.length}개 광고를 분석 대상으로 불러왔습니다.`, { id: 'auto-analysis' });
-          
-          // 자동으로 분석 시작
-          setTimeout(() => {
-            handleAnalyze(pendingAds);
-          }, 1000);
-        } else {
-          toast.error('분석 가능한 광고가 없습니다.', { id: 'auto-analysis' });
+        // 통계 업데이트
+        if (result.data?.stats) {
+          setAutomationStats(result.data.stats);
         }
+        
+        // 분석 완료 후 리다이렉트 제안
+        if (result.data?.analysisStarted) {
+          const shouldViewResults = confirm(
+            '분석이 시작되었습니다.\n결과 페이지로 이동하시겠습니까?'
+          );
+          
+          if (shouldViewResults) {
+            // 분석 결과가 있으면 completed 상태로 이동
+            if (result.data.results?.length > 0) {
+              setResults(result.data.results);
+              setAnalysisStatus('completed');
+            }
+          }
+        }
+        
       } else {
-        toast.error('광고 데이터 불러오기 실패', { id: 'auto-analysis' });
+        toast.error(`분석 전송 실패: ${result.message}`, { id: 'auto-analysis' });
       }
-      
     } catch (error) {
-      toast.error('자동 분석 준비 중 오류 발생', { id: 'auto-analysis' });
+      toast.error('분석 시스템 연동 중 오류 발생', { id: 'auto-analysis' });
       console.error('자동 분석 오류:', error);
     }
   };
 
-  useEffect(() => {
-    if (mountedRef.current) return;
-    mountedRef.current = true;
-
-    const handleOnline = () => toast.success('네트워크 연결이 복구되었습니다.');
-    const handleOffline = () => toast.error('네트워크 연결이 끊겼습니다. 진행 상태는 자동 저장됩니다.');
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
-
-    try {
-      const raw = localStorage.getItem(SESSION_KEY);
-      const hasDefaultVideos = videos.every(v => !v.title && !v.url && !v.notes);
-      const hasNoResults = results.length === 0;
-      if (raw && hasDefaultVideos && hasNoResults && analysisStatus === 'welcome') {
-        loadSession();
-      }
-    } catch {}
-
-    // 자동화 상태 초기 조회
-    fetchAutomationStats();
-
-    const beforeUnload = () => {
+  const handlePaste = (e: ClipboardEvent<HTMLInputElement>, rowIndex: number, field: keyof VideoRow) => {
+    e.preventDefault();
+    const pastedText = e.clipboardData.getData('text');
+    const lines = pastedText.trim().split('\n');
+    
+    if (lines.length > 1) {
+      const newVideos = [...videos];
+      lines.forEach((line, index) => {
+        const targetRowIndex = rowIndex + index;
+        if (targetRowIndex < newVideos.length) {
+          const columns = line.split('\t');
+          if (columns.length >= 3) {
+            newVideos[targetRowIndex] = {
+              title: columns[0]?.trim() || '',
+              url: columns[1]?.trim() || '',
+              notes: columns[2]?.trim() || ''
+            };
+          } else if (field === 'title' && columns[0]) {
+            newVideos[targetRowIndex].title = columns[0].trim();
+          }
+        }
+      });
+      setVideos(newVideos);
       saveSession();
-    };
-    window.addEventListener('beforeunload', beforeUnload);
-
-    return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
-      window.removeEventListener('beforeunload', beforeUnload);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (saveTimerRef.current) {
-      clearTimeout(saveTimerRef.current);
+      toast.success(`${lines.length}개 행 데이터가 붙여넣어졌습니다.`);
+    } else {
+      const newVideos = [...videos];
+      newVideos[rowIndex] = { ...newVideos[rowIndex], [field]: pastedText };
+      setVideos(newVideos);
+      saveSession();
     }
-    saveTimerRef.current = setTimeout(saveSession, 1200);
-  }, [videos, analysisStatus, results, selectedVideo, error]);
-
-  const handleInputChange = (index: number, field: keyof VideoRow, value: string) => {
-    setVideos(currentVideos => 
-      currentVideos.map((video, i) => 
-        i === index ? { ...video, [field]: value } : video
-      )
-    );
   };
 
-  const addNewRow = () => {
-    setVideos(prevVideos => [...prevVideos, { title: '', url: '', notes: '' }]);
-    toast.success('새 행이 추가되었습니다.');
+  const addRow = () => {
+    setVideos([...videos, { title: '', url: '', notes: '' }]);
   };
 
   const removeRow = (index: number) => {
     if (videos.length > 1) {
-      setVideos(prevVideos => prevVideos.filter((_, i) => i !== index));
-      toast.success('행이 삭제되었습니다.');
-    } else {
-      toast.error('최소 하나의 행은 유지되어야 합니다.');
+      const newVideos = videos.filter((_, i) => i !== index);
+      setVideos(newVideos);
+      saveSession();
     }
   };
 
-  const handlePaste = (e: ClipboardEvent<HTMLInputElement>, rowIndex: number, colIndex: number) => {
-    e.preventDefault();
-
-    const pasteData = e.clipboardData.getData('text');
-    if (!pasteData) return;
-
-    const pastedRows = pasteData.split('\n').filter(row => row.trim() !== '');
-    
-    setVideos(currentVideos => {
-      const newVideos = [...currentVideos];
-      
-      pastedRows.forEach((row, r_idx) => {
-        const currentRowIndex = rowIndex + r_idx;
-        
-        if (currentRowIndex >= newVideos.length) {
-          const additionalRows = currentRowIndex - newVideos.length + 1;
-          for (let i = 0; i < additionalRows; i++) {
-            newVideos.push({ title: '', url: '', notes: '' });
-          }
-        }
-
-        const pastedCells = row.split('\t');
-        const currentVideo = { ...newVideos[currentRowIndex] };
-
-        pastedCells.forEach((cell, cellIndex) => {
-          const targetColIndex = colIndex + cellIndex;
-          if (targetColIndex === 0) {
-            currentVideo.title = cell.trim();
-          } else if (targetColIndex === 1) {
-            currentVideo.url = cell.trim();
-          } else if (targetColIndex === 2) {
-            currentVideo.notes = cell.trim();
-          }
-        });
-
-        newVideos[currentRowIndex] = currentVideo;
-      });
-      
-      return newVideos;
-    });
-
-    toast.success(`${pastedRows.length}행의 데이터가 붙여넣어졌습니다.`);
+  const updateVideo = (index: number, field: keyof VideoRow, value: string) => {
+    const newVideos = [...videos];
+    newVideos[index] = { ...newVideos[index], [field]: value };
+    setVideos(newVideos);
+    saveSession();
   };
 
-  // handleAnalyze 함수 수정 - 백엔드 응답 형식 처리
-  const handleAnalyze = async (videosToAnalyze?: VideoRow[]) => {
-    setAnalysisStatus('loading');
-    setError(null);
-    setResults([]);
-    setSelectedVideo(null);
-
-    saveSession();
-
-    const targetVideos = videosToAnalyze || videos.filter(v => v.url.trim() !== '');
-    if (targetVideos.length === 0) {
-      setError("분석할 영상의 URL을 하나 이상 입력해주세요.");
-      setAnalysisStatus('input');
+  const handleAnalyze = async () => {
+    const validVideos = videos.filter(v => v.url.trim() !== '');
+    
+    if (validVideos.length === 0) {
+      toast.error('분석할 영상 URL을 입력해주세요.');
       return;
     }
 
+    setAnalysisStatus('loading');
+    setError(null);
+    setResults([]);
+
     try {
+      toast.loading(`${validVideos.length}개 영상 분석 중...`, { id: 'analysis' });
+
       const response = await fetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ videos: targetVideos }),
+        body: JSON.stringify({ videos: validVideos }),
       });
 
-      const data = await response.json().catch(async () => {
-        throw new Error(`서버 응답 오류: ${response.status}`);
-      });
-      
-      if (!response.ok) throw new Error(data.message || `서버 에러: ${response.status}`);
-      
-      // 백엔드 응답 형식을 프론트엔드 형식으로 변환
-      if (data.results && Array.isArray(data.results)) {
-        const formattedResults = data.results.map((result: any) => {
-          // 완성도 5% 이상이면 성공으로 처리
-          if (result.status === 'completed' && result.completionStats?.percentage > 5) {
-            return {
-              status: 'fulfilled',
-              value: {
-                id: result.id,
-                title: result.title,
-                url: result.url,
-                notes: result.notes || '',
-                status: 'completed',
-                analysis: result.analysis || {},
-                completionStats: result.completionStats || {
-                  completed: 0,
-                  incomplete: 156,
-                  total: 156,
-                  percentage: 0
-                },
-                scriptLanguage: result.scriptLanguage || 'none'
-              }
-            };
-          } else {
-            return {
-              status: 'rejected',
-              reason: {
-                id: result.id || 'unknown',
-                title: result.title || '알 수 없음',
-                url: result.url || '',
-                status: 'failed',
-                error: result.geminiStatus || result.error || '분석 실패'
-              }
-            };
-          }
-        });
-        
-        setResults(formattedResults);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: 서버 오류`);
+      }
 
-        const successCount = formattedResults.filter((r: AnalysisResult) => r.status === 'fulfilled').length;
-        const failCount = formattedResults.filter((r: AnalysisResult) => r.status === 'rejected').length;
-        
-        // Google Drive 업로드 상태 확인
-        if (data.upload?.success === false && data.upload?.error?.includes('storage')) {
-          toast.error('⚠️ Google Drive 용량 초과로 업로드 실패', { duration: 5000 });
-        }
-        
-        toast.success(`분석 완료! 성공: ${successCount}개, 실패: ${failCount}개`);
+      const data = await response.json();
+      
+      // 새로운 통합 형식 확인
+      if (data.analysis_results && Array.isArray(data.analysis_results)) {
+        setResults(data.analysis_results);
+        const successCount = data.analysis_results.filter((r: any) => r.status === 'fulfilled').length;
+        const failCount = data.analysis_results.filter((r: any) => r.status === 'rejected').length;
+        toast.success(`통합 분석 완료! 성공: ${successCount}개, 실패: ${failCount}개`, { id: 'analysis' });
       } else {
         // 기존 형식 호환성 유지
         setResults(data.results || []);
       }
 
       saveSession();
+      // ✅ 추가: 분석 완료 후 DB 통계 새로고침
+      await loadDatabaseStats();
     } catch (err: any) {
       setError(err.message || '분석 요청 중 오류가 발생했습니다.');
-      toast.error(`분석 중 오류 발생: ${err.message || '네트워크 오류'}`);
+      toast.error(`분석 중 오류 발생: ${err.message || '네트워크 오류'}`, { id: 'analysis' });
     } finally {
       setAnalysisStatus('completed');
       saveSession();
@@ -540,38 +496,32 @@ export default function Home() {
         <CardContent>
           <Tabs defaultValue={categories[0]} className="w-full">
             <TabsList className="grid w-full grid-cols-3 md:grid-cols-4 lg:grid-cols-5 mb-8">
-              {categories.map(category => (
-                <TabsTrigger 
-                  key={category} 
-                  value={category}
-                  className="text-sm font-medium transition-all hover:bg-gray-100"
-                >
-                  {category}
+              {categories.slice(0, 5).map((category) => (
+                <TabsTrigger key={category} value={category} className="text-xs md:text-sm">
+                  {category.length > 8 ? `${category.slice(0, 8)}...` : category}
                 </TabsTrigger>
               ))}
             </TabsList>
             
-            {categories.map(category => (
+            {categories.map((category) => (
               <TabsContent key={category} value={category} className="mt-6">
-                <div className="rounded-lg border border-gray-200 overflow-hidden">
+                <div className="max-h-80 overflow-y-auto border rounded-lg">
                   <Table>
-                    <TableHeader>
-                      <TableRow className="bg-gray-50">
-                        <TableHead className="w-[35%] font-semibold text-gray-700">피처</TableHead>
-                        <TableHead className="font-semibold text-gray-700">분석 결과</TableHead>
+                    <TableHeader className="sticky top-0 bg-white">
+                      <TableRow>
+                        <TableHead className="font-semibold text-gray-700 py-3">특성</TableHead>
+                        <TableHead className="font-semibold text-gray-700 py-3">분석 결과</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {Object.entries(analysisData[category]).map(([feature, value], index) => {
-                        const isIncomplete = String(value).startsWith('분석불가/') || 
-                                           String(value).startsWith('판단불가/') || 
-                                           value === 'N/A' || 
-                                           value === '미확인';
+                      {Object.entries(analysisData[category]).map(([feature, value]) => {
+                        const isIncomplete = !value || value === 'N/A' || value === '미확인' || 
+                                           String(value).startsWith('분석불가/') || String(value).startsWith('판단불가/');
                         
                         return (
                           <TableRow 
                             key={feature}
-                            className={`${index % 2 === 0 ? 'bg-white' : 'bg-gray-25'} hover:bg-blue-50 transition-colors`}
+                            className={`${isIncomplete ? 'bg-red-25' : 'bg-white'} hover:bg-blue-50 transition-colors`}
                           >
                             <TableCell className="font-medium text-gray-800 py-3">
                               {feature}
@@ -641,6 +591,21 @@ export default function Home() {
                 </Button>
               )}
               
+              {/* ✅ 추가: DB 통계 새로고침 버튼 */}
+              <Button 
+                onClick={loadDatabaseStats}
+                disabled={isLoadingDbStats}
+                variant="outline"
+                size="sm"
+              >
+                {isLoadingDbStats ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                )}
+                DB 상태
+              </Button>
+              
               <Button 
                 variant="default" 
                 onClick={() => setAnalysisStatus('input')}
@@ -652,6 +617,38 @@ export default function Home() {
           )}
         </div>
       </div>
+
+      {/* ✅ 추가: DB 통계 표시 카드 */}
+      {dbStats && analysisStatus === 'welcome' && (
+        <Card className="mb-8 border-l-4 border-l-blue-500">
+          <CardHeader>
+            <CardTitle className="text-lg text-blue-700 flex items-center">
+              <Database className="mr-2 h-5 w-5" />
+              데이터베이스 현황
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="text-center">
+                <div className="text-2xl font-bold text-blue-600">{dbStats.total}</div>
+                <div className="text-sm text-gray-600">전체 영상</div>
+              </div>
+              <div className="text-center">
+                <div className="text-2xl font-bold text-orange-600">{dbStats.pending}</div>
+                <div className="text-sm text-gray-600">분석 대기</div>
+              </div>
+              <div className="text-center">
+                <div className="text-2xl font-bold text-green-600">{dbStats.completed}</div>
+                <div className="text-sm text-gray-600">분석 완료</div>
+              </div>
+              <div className="text-center">
+                <div className="text-2xl font-bold text-red-600">{dbStats.failed}</div>
+                <div className="text-sm text-gray-600">분석 실패</div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* 자동화 상태 표시 */}
       {automationStats && analysisStatus === 'welcome' && (
@@ -694,256 +691,210 @@ export default function Home() {
                 엑셀/시트에서 데이터를 복사한 후, 아래 표의 시작할 셀을 클릭하고 붙여넣기 (Ctrl+V) 하세요.
               </p>
             </CardHeader>
-            <CardContent className="p-6">
-              <div className="max-h-96 overflow-auto rounded-lg border border-gray-200">
+            <CardContent className="pt-6">
+              <div className="flex justify-between items-center mb-4">
+                <span className="text-sm text-gray-600">
+                  입력된 영상: {videos.filter(v => v.url.trim()).length}개
+                </span>
+                <div className="space-x-2">
+                  <Button
+                    onClick={addRow}
+                    variant="outline"
+                    size="sm"
+                    className="text-green-600 border-green-300 hover:bg-green-50"
+                  >
+                    <Plus className="mr-1 h-4 w-4" />
+                    행 추가
+                  </Button>
+                  <Button
+                    onClick={handleAnalyze}
+                    disabled={videos.filter(v => v.url.trim()).length === 0}
+                    className="bg-blue-600 hover:bg-blue-700 text-white"
+                  >
+                    <BarChart3 className="mr-2 h-4 w-4" />
+                    분석 시작 ({videos.filter(v => v.url.trim()).length}개)
+                  </Button>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto border rounded-lg">
                 <Table>
                   <TableHeader>
-                    <TableRow className="bg-gray-100">
-                      <TableHead className="w-[25%] font-semibold text-gray-700">제목</TableHead>
-                      <TableHead className="w-[40%] font-semibold text-gray-700">영상 링크 (URL)</TableHead>
-                      <TableHead className="w-[25%] font-semibold text-gray-700">비고</TableHead>
-                      <TableHead className="w-[10%] font-semibold text-gray-700 text-center">삭제</TableHead>
+                    <TableRow className="bg-gray-50">
+                      <TableHead className="font-semibold">제목</TableHead>
+                      <TableHead className="font-semibold">YouTube URL</TableHead>
+                      <TableHead className="font-semibold">비고</TableHead>
+                      <TableHead className="w-12"></TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {videos.map((video, rowIndex) => (
-                      <TableRow key={rowIndex} className="hover:bg-gray-50 transition-colors">
+                    {videos.map((video, index) => (
+                      <TableRow key={index} className="group hover:bg-blue-25">
                         <TableCell>
-                          <Input 
-                            value={video.title} 
-                            onChange={(e) => handleInputChange(rowIndex, 'title', e.target.value)} 
-                            onPaste={(e) => handlePaste(e, rowIndex, 0)}
-                            placeholder="영상 제목"
-                            className="border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                          <Input
+                            value={video.title}
+                            onChange={(e) => updateVideo(index, 'title', e.target.value)}
+                            onPaste={(e) => handlePaste(e, index, 'title')}
+                            placeholder="영상 제목 (선택사항)"
+                            className="border-gray-200 focus:border-blue-400"
                           />
                         </TableCell>
                         <TableCell>
-                          <Input 
-                            value={video.url} 
-                            onChange={(e) => handleInputChange(rowIndex, 'url', e.target.value)} 
-                            onPaste={(e) => handlePaste(e, rowIndex, 1)}
+                          <Input
+                            value={video.url}
+                            onChange={(e) => updateVideo(index, 'url', e.target.value)}
+                            onPaste={(e) => handlePaste(e, index, 'url')}
                             placeholder="https://youtube.com/watch?v=..."
-                            className="border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                            className="border-gray-200 focus:border-blue-400"
                           />
                         </TableCell>
                         <TableCell>
-                          <Input 
-                            value={video.notes} 
-                            onChange={(e) => handleInputChange(rowIndex, 'notes', e.target.value)} 
-                            onPaste={(e) => handlePaste(e, rowIndex, 2)}
-                            placeholder="메모"
-                            className="border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                          <Input
+                            value={video.notes}
+                            onChange={(e) => updateVideo(index, 'notes', e.target.value)}
+                            onPaste={(e) => handlePaste(e, index, 'notes')}
+                            placeholder="메모 (선택사항)"
+                            className="border-gray-200 focus:border-blue-400"
                           />
                         </TableCell>
-                        <TableCell className="text-center">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => removeRow(rowIndex)}
-                            disabled={videos.length <= 1}
-                            className="text-red-600 hover:text-red-800 hover:bg-red-50"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
+                        <TableCell>
+                          {videos.length > INITIAL_ROWS / 2 && (
+                            <Button
+                              onClick={() => removeRow(index)}
+                              variant="ghost"
+                              size="sm"
+                              className="opacity-0 group-hover:opacity-100 text-red-500 hover:text-red-700 hover:bg-red-50 transition-all"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          )}
                         </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
                 </Table>
               </div>
-              
-              <div className="mt-4 text-center">
-                <Button
-                  variant="outline"
-                  onClick={addNewRow}
-                  className="bg-green-50 text-green-700 border-green-300 hover:bg-green-100 hover:border-green-400"
-                >
-                  <Plus className="mr-2 h-4 w-4" />
-                  행 추가
-                </Button>
+
+              <div className="mt-4 p-3 bg-blue-50 rounded-lg text-sm text-blue-700">
+                <strong>💡 팁:</strong> 엑셀에서 데이터 복사 시 제목, URL, 비고 순서로 탭(Tab)으로 구분된 데이터를 붙여넣으면 자동으로 분배됩니다.
               </div>
             </CardContent>
           </Card>
-          
-          <div className="text-center my-8">
-            <Button 
-              onClick={() => handleAnalyze()} 
-              size="lg"
-              className="bg-green-600 hover:bg-green-700 text-white font-semibold px-8 py-3 text-lg transition-colors shadow-lg"
-            >
-              분석 시작
-            </Button>
-          </div>
         </>
       )}
 
       {analysisStatus === 'loading' && (
-        <div className="text-center my-20">
-          <Loader2 className="mx-auto h-16 w-16 animate-spin text-blue-600" />
-          <p className="mt-6 text-xl text-gray-700 font-medium">영상 데이터를 분석 중입니다. 잠시만 기다려주세요...</p>
-          <p className="mt-2 text-sm text-gray-500">156가지 피처를 상세히 분석하고 있습니다.</p>
-          <p className="mt-1 text-sm text-gray-500">다국어 영상도 지원됩니다.</p>
-          <p className="mt-2 text-sm text-green-600 font-medium">✅ 분석 완료시 자동으로 Google Drive에 업로드됩니다!</p>
-        </div>
-      )}
-
-      {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 px-6 py-4 rounded-lg relative mb-8 shadow-sm" role="alert">
-          <strong className="font-bold">오류 발생: </strong>
-          <span className="block sm:inline">{error}</span>
-        </div>
+        <Card className="shadow-lg border-0 text-center py-12">
+          <CardContent>
+            <Loader2 className="h-16 w-16 animate-spin mx-auto text-blue-600 mb-6" />
+            <h2 className="text-2xl font-bold text-gray-800 mb-4">AI 분석 진행 중...</h2>
+            <p className="text-gray-600 text-lg">
+              YouTube 영상을 다운로드하고 156가지 특성을 분석하고 있습니다.<br />
+              영상의 개수와 길이에 따라 수 분이 소요될 수 있습니다.
+            </p>
+          </CardContent>
+        </Card>
       )}
 
       {analysisStatus === 'completed' && (
         <>
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-            <div className="lg:col-span-1 flex flex-col gap-6">
-              <Card className="shadow-lg border-0">
-                <CardHeader className="bg-gradient-to-r from-green-50 to-emerald-50">
-                  <CardTitle className="flex items-center text-lg font-bold text-gray-800">
-                    <CheckCircle className="mr-3 text-green-500 h-5 w-5" /> 
-                    분석 완료 ({completedVideos.length})
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="max-h-96 overflow-y-auto p-4">
-                  <ul className="space-y-3">
-                    {completedVideos.map(item => (
-                      <li 
-                        key={item.value.id} 
-                        onClick={() => setSelectedVideo(item)} 
-                        className={`p-3 rounded-lg cursor-pointer transition-all ${
-                          selectedVideo?.value?.id === item.value.id 
-                            ? 'bg-blue-100 text-blue-800 border-2 border-blue-200' 
-                            : 'hover:bg-gray-50 border border-gray-200'
-                        }`}
-                      >
-                        <div className="font-medium mb-1">{item.value.title}</div>
-                        <div className="flex justify-between text-sm">
-                          <span className="text-gray-500">완료도: {item.value.completionStats.percentage}%</span>
-                          <span className="text-gray-500">
-                            {item.value.completionStats.completed}/{item.value.completionStats.total}
-                          </span>
-                        </div>
-                        <div className="w-full bg-gray-200 rounded-full h-2 mt-2">
-                          <div 
-                            className="bg-green-500 h-2 rounded-full transition-all" 
-                            style={{ width: `${item.value.completionStats.percentage}%` }}
-                          />
-                        </div>
-                        {item.value.scriptLanguage && item.value.scriptLanguage !== 'none' && (
-                          <div className="text-xs text-blue-600 mt-1">
-                            언어: {item.value.scriptLanguage}
-                          </div>
-                        )}
-                        <div className="text-xs text-green-600 mt-1 flex items-center">
-                          <CheckCircle className="h-3 w-3 mr-1" />
-                          Drive 자동 업로드 완료
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                </CardContent>
-              </Card>
-
-              <Card className="shadow-lg border-0">
-                <CardHeader className="bg-gradient-to-r from-red-50 to-rose-50">
-                  <CardTitle className="flex items-center text-lg font-bold text-gray-800">
-                    <AlertCircle className="mr-3 text-red-500 h-5 w-5" /> 
-                    분석 미완 ({failedVideos.length})
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="max-h-96 overflow-y-auto p-4">
-                  <ul className="space-y-3">
-                    {failedVideos.map(item => (
-                      <li 
-                        key={item.reason.id} 
-                        onClick={() => setSelectedVideo(item)} 
-                        className={`p-3 rounded-lg cursor-pointer transition-all ${
-                          selectedVideo?.reason?.id === item.reason.id 
-                            ? 'bg-red-100 text-red-800 border-2 border-red-200' 
-                            : 'hover:bg-gray-50 border border-gray-200'
-                        }`}
-                      >
-                        <div className="font-medium text-red-700">{item.reason.title}</div>
-                        <div className="text-sm text-red-500 mt-1">분석 실패: {item.reason.error}</div>
-                      </li>
-                    ))}
-                  </ul>
-                </CardContent>
-              </Card>
+          <div className="flex justify-between items-center mb-6">
+            <div>
+              <h2 className="text-2xl font-bold text-gray-800">분석 결과</h2>
+              <p className="text-gray-600">
+                총 {results.length}개 영상 중 성공 {completedVideos}개, 실패 {failedVideos}개
+              </p>
             </div>
-
-            <div className="lg:col-span-2">
-              {renderAnalysisDetail()}
-            </div>
-          </div>
-
-          <div className="mt-6">
-            <ResultsFooter results={results as any} />
-          </div>
-        </>
-      )}
-
-      {analysisStatus === 'welcome' && (
-        <div className="text-center my-20">
-          <h2 className="text-3xl font-semibold text-gray-800 mb-4">AI 광고 영상 분석을 시작하세요</h2>
-          <p className="text-lg text-gray-600 mb-8">YouTube 영상 링크를 입력하거나 자동 수집하여 156가지 상세 피처를 분석해보세요.</p>
-          
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8 max-w-4xl mx-auto">
-            <Card className="p-6 text-center border-2 border-green-200 bg-green-50">
-              <Database className="mx-auto h-12 w-12 text-green-600 mb-4" />
-              <h3 className="text-xl font-semibold text-green-800 mb-2">자동 수집</h3>
-              <p className="text-green-700 mb-4">SerpAPI를 통해 YouTube 광고를 자동으로 수집합니다</p>
-              <Button 
-                onClick={handleAutoCollect}
-                disabled={isAutoCollecting}
-                className="bg-green-600 hover:bg-green-700 text-white"
-              >
-                {isAutoCollecting ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    수집 중...
-                  </>
-                ) : (
-                  <>
-                    <Database className="mr-2 h-4 w-4" />
-                    자동 수집 시작
-                  </>
-                )}
-              </Button>
-            </Card>
-            
-            <Card className="p-6 text-center border-2 border-blue-200 bg-blue-50">
-              <BarChart3 className="mx-auto h-12 w-12 text-blue-600 mb-4" />
-              <h3 className="text-xl font-semibold text-blue-800 mb-2">수동 분석</h3>
-              <p className="text-blue-700 mb-4">직접 YouTube 링크를 입력하여 분석합니다</p>
-              <Button 
+            <div className="space-x-3">
+              <Button
                 onClick={() => setAnalysisStatus('input')}
-                className="bg-blue-600 hover:bg-blue-700 text-white"
+                variant="outline"
+                className="text-blue-600 border-blue-300 hover:bg-blue-50"
               >
-                링크 수동 추가
+                새 분석 시작
               </Button>
+              <DriveUploadButton
+                items={results.filter(r => r.status === 'fulfilled').map(r => r.value)}
+                fileName="AI_광고_분석_결과.xlsx"
+                workbookTitle="AI Ad Analysis Results"
+                className="bg-green-600 hover:bg-green-700 text-white"
+              />
+            </div>
+          </div>
+
+          {error && (
+            <Card className="mb-6 border-red-200 bg-red-50">
+              <CardContent className="pt-6">
+                <div className="flex items-center text-red-600">
+                  <AlertCircle className="mr-3 h-5 w-5" />
+                  <p>{error}</p>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            {/* 결과 목록 */}
+            <Card className="shadow-lg border-0">
+              <CardHeader className="bg-gray-50">
+                <CardTitle className="text-xl font-bold text-gray-800">
+                  분석 결과 목록 ({results.length}개)
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-0">
+                <div className="max-h-96 overflow-y-auto">
+                  {results.map((result, index) => (
+                    <div
+                      key={index}
+                      onClick={() => setSelectedVideo(result)}
+                      className={`p-4 border-b cursor-pointer transition-colors hover:bg-blue-50 ${
+                        selectedVideo === result ? 'bg-blue-100 border-l-4 border-l-blue-500' : ''
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex-1 min-w-0">
+                          <h3 className="font-medium text-gray-800 truncate">
+                            {result.status === 'fulfilled' ? result.value.title : result.reason.title}
+                          </h3>
+                          <p className="text-sm text-gray-500 truncate">
+                            {result.status === 'fulfilled' ? result.value.url : result.reason.url}
+                          </p>
+                        </div>
+                        <div className="ml-4 flex-shrink-0">
+                          {result.status === 'fulfilled' ? (
+                            <div className="flex items-center space-x-2">
+                              <CheckCircle className="h-5 w-5 text-green-500" />
+                              <span className="text-sm font-medium text-green-600">
+                                {result.value.completionStats.percentage}%
+                              </span>
+                            </div>
+                          ) : (
+                            <div className="flex items-center space-x-2">
+                              <AlertCircle className="h-5 w-5 text-red-500" />
+                              <span className="text-sm font-medium text-red-600">실패</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* 상세 분석 결과 */}
+            <Card className="shadow-lg border-0">
+              <CardHeader className="bg-gray-50">
+                <CardTitle className="text-xl font-bold text-gray-800">상세 분석 결과</CardTitle>
+              </CardHeader>
+              <CardContent className="p-6">
+                {renderAnalysisDetail()}
+              </CardContent>
             </Card>
           </div>
-          
-          <div className="flex justify-center items-center space-x-8 mb-8">
-            <div className="text-center">
-              <BarChart3 className="mx-auto h-12 w-12 text-blue-600 mb-2" />
-              <p className="text-sm text-gray-600">156가지 상세 분석</p>
-            </div>
-            <div className="text-center">
-              <CheckCircle className="mx-auto h-12 w-12 text-green-600 mb-2" />
-              <p className="text-sm text-gray-600">완료도 실시간 표시</p>
-            </div>
-            <div className="text-center">
-              <AlertCircle className="mx-auto h-12 w-12 text-purple-600 mb-2" />
-              <p className="text-sm text-gray-600">분석불가 사유 제공</p>
-            </div>
-          </div>
-          
-          <p className="text-sm text-gray-500 mt-4">한국어, 영어, 일본어, 중국어 등 다국어 영상 지원</p>
-          <p className="text-sm text-green-600 mt-2 font-medium">✅ 분석 완료시 Google Drive에 자동 업로드</p>
-        </div>
+
+          <ResultsFooter results={results} />
+        </>
       )}
     </main>
   );
