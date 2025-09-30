@@ -1,4 +1,4 @@
-// src/app/api/drive/upload-sql/route.ts - 올바른 import로 수정
+// src/app/api/drive/upload-sql/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { uploadDatabaseToCSV, testGoogleDriveConnection } from '@/lib/google-drive';
 import { getGlobalDB } from '@/lib/sql-database';
