@@ -129,13 +129,20 @@ export default function Home() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
-          maxAds: 25,
+          maxAds: 200, // Python 스크립트 최대 능력 활용
           searchQueries: [
-            "advertisement commercial",
-            "product promotion", 
-            "brand commercial",
-            "sponsored content",
-            "new product launch"
+            // 영어 검색어
+            "advertisement commercial", "product promotion", "brand commercial",
+            "sponsored content", "new product launch", "company ad",
+            "marketing video", "product review", "unboxing video sponsored",
+            "paid partnership", "ad campaign", "promotional video",
+            "infomercial", "sponsored review", "affiliate marketing",
+            "brand partnership", "influencer ad", "commercial 2024",
+            "product launch", "brand campaign", "sponsored post",
+            // 한글 검색어 (한국 시장 광고 수집)
+            "상품 광고", "브랜드 홍보", "제품 리뷰", "협찬 영상",
+            "제품 홍보", "광고 영상", "마케팅 영상", "브랜드 캠페인",
+            "상품 소개", "제품 체험", "협찬 리뷰", "광고 콘텐츠"
           ]
         })
       });
