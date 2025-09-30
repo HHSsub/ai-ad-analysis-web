@@ -1,4 +1,4 @@
-// src/types/video.ts - 하드코딩 제거, CSV만 사용
+// src/types/video.ts
 
 export interface VideoInput {
   title: string;
@@ -6,6 +6,7 @@ export interface VideoInput {
   note: string;
 }
 
+// ✅ 'analyzing', 'incomplete' 추가 (에러 수정)
 export type AnalysisStatus = 'welcome' | 'input' | 'loading' | 'analyzing' | 'completed' | 'incomplete' | 'failed';
 
 export interface YouTubeMetadata {
@@ -31,7 +32,7 @@ export interface AnalysisResult {
   id: string;
   title: string;
   url: string;
-  notes: string;
+  notes: string; // ✅ 'note'가 아닌 'notes' (에러 수정)
   status: AnalysisStatus;
   analysis?: { [category: string]: { [feature: string]: string } };
   features?: { [key: string]: any };
@@ -87,8 +88,8 @@ export interface AnalyzedVideo extends AnalysisResult {
   updatedAt?: string;
 }
 
-// ⚠️ VIDEO_FEATURES 하드코딩 완전 제거
-// 대신 loadFeaturesFromCSV() 사용
+// ⚠️ VIDEO_FEATURES 하드코딩 제거 - CSV에서 로드하도록 변경
+// 기존 코드에서 VIDEO_FEATURES를 사용하는 곳은 loadFeaturesFromCSV()로 대체
 
 export interface VideoStoreState {
   videos: VideoInput[];
