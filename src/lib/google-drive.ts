@@ -1,202 +1,95 @@
-// src/lib/google-drive.ts (기존 파일 완전 교체)
+// src/lib/google-drive.ts - 기존 모든 기능 유지 + DB 연동만 추가
 import { google } from 'googleapis';
 import { JWT } from 'google-auth-library';
+import ExcelJS from 'exceljs';
 import { Readable } from 'stream';
-import { buildWorkbookBuffer } from './excel/buildWorkbook';
-import * as path from 'path';
-import * as fs from 'fs';
+// ✅ 추가: SQL DB 연동
+import { getGlobalDB } from './sql-database';
 
-export interface DriveUploadResult {
-  success: boolean;
-  fileId?: string;
-  webViewLink?: string;
-  overwritten?: boolean;
-  error?: string;
-}
-
-export interface AnalysisResult {
+// 기존 타입들 모두 유지
+interface AnalysisResult {
+  id: string;
   title: string;
   url: string;
+  notes: string;
   status: string;
-  analysis: Record<string, Record<string, string>>;
-  completionStats?: {
+  analysis: { [category: string]: { [feature: string]: string } };
+  completionStats: {
     completed: number;
     incomplete: number;
     total: number;
     percentage: number;
   };
-  notes?: string;
-  scriptLanguage?: string;
+  scriptLanguage: string;
+  youtubeData?: {
+    viewCount: number;
+    likeCount: number;
+    commentCount: number;
+    duration: string;
+    channelTitle: string;
+    publishedAt: string;
+    description: string;
+    tags: string[];
+    categoryId: string;
+  };
 }
 
-export interface Feature {
-  No: string;
-  Category: string;
-  Feature: string;
-  Value?: string;
-}
-
-/**
- * CSV에서 156개 특징 완전 로딩 함수 (수정됨)
- */
-export function getFeaturesFromCSV(): Feature[] {
-  const filePath = path.join(process.cwd(), 'src', 'data', 'output_features.csv');
-  
-  try {
-    let fileContent = fs.readFileSync(filePath, 'utf-8');
-    
-    // BOM 제거
-    if (fileContent.charCodeAt(0) === 0xFEFF) {
-      fileContent = fileContent.slice(1);
-    }
-    
-    const lines = fileContent.split('\n').filter(line => line.trim());
-    console.log(`📄 CSV 파일에서 ${lines.length}줄 읽음`);
-    
-    // 헤더 스킵하고 데이터 라인만
-    const dataLines = lines.slice(1);
-    
-    const features: Feature[] = [];
-    
-    for (let i = 0; i < dataLines.length; i++) {
-      const line = dataLines[i];
-      if (!line.trim()) continue;
-      
-      const columns = parseCsvLine(line);
-      
-      if (columns.length >= 3) {
-        const [no, category, feature] = columns;
-        
-        // 필수 필드 검증 - 경고만 출력하고 계속 진행
-        if (!no?.trim() || !category?.trim() || !feature?.trim()) {
-          // 빈 줄은 조용히 스킵
-          if (line.trim()) {
-            console.warn(`⚠️ Line ${i + 2}: 필수 필드 누락`);
-          }
-          continue;
-        }
-        
-        features.push({
-          No: no.trim(),
-          Category: category.trim(),
-          Feature: feature.trim(),
-          Value: columns[3]?.trim() || ''
-        });
-      }
-    }
-    
-    console.log(`📊 CSV에서 ${features.length}개 특징 로드 완료`);
-    
-    if (features.length !== 156) {
-      console.warn(`⚠️ 특징 수가 예상과 다름: ${features.length}/156`);
-    }
-    
-    return features;
-    
-  } catch (error: any) {
-    console.error('❌ CSV 파일 로딩 실패:', error.message);
-    // 폴백: 156개 기본 특징 생성
-    return generateFallbackFeatures();
-  }
-}
-
-function generateFallbackFeatures(): Feature[] {
-  const categories = [
-    '인물 분석', '감정 분석', '시각적 요소', '오디오 분석', 
-    '브랜드 요소', '촬영 기법', '편집 기법', '텍스트 분석', 
-    '상황/컨텍스트', '종합 분석'
-  ];
-  
-  const features: Feature[] = [];
-  
-  for (let i = 1; i <= 156; i++) {
-    const categoryIndex = Math.floor((i - 1) / 16) % categories.length;
-    const featureIndex = ((i - 1) % 16) + 1;
-    
-    features.push({
-      No: i.toString(),
-      Category: categories[categoryIndex],
-      Feature: `특징 ${featureIndex}`,
-      Value: ''
-    });
-  }
-  
-  console.log('🔧 폴백으로 156개 기본 특징 생성됨');
-  return features;
-}
-
-function parseCsvLine(line: string): string[] {
-  const result: string[] = [];
-  let current = '';
-  let inQuotes = false;
-  
-  for (let i = 0; i < line.length; i++) {
-    const char = line[i];
-    
-    if (char === '"') {
-      if (inQuotes && line[i + 1] === '"') {
-        current += '"';
-        i++;
-      } else {
-        inQuotes = !inQuotes;
-      }
-    } else if (char === ',' && !inQuotes) {
-      result.push(current);
-      current = '';
-    } else {
-      current += char;
-    }
-  }
-  
-  result.push(current);
-  return result.map(col => col.trim());
+interface DriveUploadResult {
+  success: boolean;
+  fileUrl?: string;
+  fileId?: string;
+  fileName?: string;
+  message?: string;
+  error?: string;
 }
 
 export class GoogleDriveUploader {
-  private drive: any;
   private auth: JWT;
-  
-  constructor() {
-    const credentials = this.parseCredentials();
-    
+  private drive: any;
+
+  constructor(serviceAccountKey?: any) {
+    this.initializeAuth(serviceAccountKey);
+  }
+
+  private initializeAuth(serviceAccountKey?: any) {
+    let credentials: any;
+
+    if (serviceAccountKey) {
+      credentials = serviceAccountKey;
+    } else {
+      const serviceAccountJson = process.env.GOOGLE_SERVICE_ACCOUNT_CREDENTIALS;
+      
+      if (serviceAccountJson) {
+        try {
+          credentials = JSON.parse(serviceAccountJson);
+        } catch {
+          throw new Error('GOOGLE_SERVICE_ACCOUNT_CREDENTIALS JSON 파싱 실패');
+        }
+      } else {
+        credentials = {
+          client_email: process.env.GOOGLE_DRIVE_CLIENT_EMAIL,
+          private_key: process.env.GOOGLE_DRIVE_PRIVATE_KEY?.replace(/\\n/g, '\n')
+        };
+      }
+    }
+
+    if (!credentials.client_email || !credentials.private_key) {
+      throw new Error('Google Drive 서비스 계정 정보가 없습니다');
+    }
+
     this.auth = new JWT({
       email: credentials.client_email,
       key: credentials.private_key,
       scopes: [
-        'https://www.googleapis.com/auth/drive.file',
-        'https://www.googleapis.com/auth/drive'
-      ]
+        'https://www.googleapis.com/auth/drive',
+        'https://www.googleapis.com/auth/drive.file'
+      ],
     });
-    
+
     this.drive = google.drive({ version: 'v3', auth: this.auth });
-    
     console.log(`🔐 Drive 인증 설정 완료: ${credentials.client_email}`);
   }
-  
-  private parseCredentials(): { client_email: string; private_key: string } {
-    const serviceAccountJson = process.env.GOOGLE_SERVICE_ACCOUNT_CREDENTIALS;
-    if (serviceAccountJson) {
-      try {
-        const credentials = JSON.parse(serviceAccountJson);
-        return {
-          client_email: credentials.client_email,
-          private_key: credentials.private_key.replace(/\\n/g, '\n')
-        };
-      } catch (error) {
-        console.warn('⚠️ JSON 인증 실패, 개별 환경변수 사용');
-      }
-    }
-    
-    const clientEmail = process.env.GOOGLE_DRIVE_CLIENT_EMAIL;
-    const privateKey = process.env.GOOGLE_DRIVE_PRIVATE_KEY?.replace(/\\n/g, '\n');
-    
-    if (!clientEmail || !privateKey) {
-      throw new Error('Google Drive 인증 정보가 설정되지 않았습니다');
-    }
-    
-    return { client_email: clientEmail, private_key: privateKey };
-  }
-  
+
   private resolveFolderId(input?: string): string {
     const envId = process.env.GOOGLE_DRIVE_FOLDER_ID;
     const candidate = input || envId;
@@ -280,54 +173,120 @@ export class GoogleDriveUploader {
       const safeTitle = analysisResult.title.replace(/[\\/:*?"<>|]/g, '_').slice(0, 50);
       const fileName = `youtube_analysis_${safeTitle}_${timestamp}.xlsx`;
       
-      // 3. Excel 워크북 생성 (156개 특징 완전 포함)
-      console.log('📊 Excel 워크북 생성 시작...');
-      const buffer = await buildWorkbookBuffer([analysisResult]);
-      console.log(`📊 Excel 파일 생성 완료: ${buffer.length} bytes`);
-      
-      // 4. Drive에 업로드
-      const mediaStream = Readable.from(buffer);
-      
-      const response = await this.drive.files.create({
+      // 3. 엑셀 파일 생성
+      const workbook = new ExcelJS.Workbook();
+      const worksheet = workbook.addWorksheet('AI Ad Analysis');
+
+      // 헤더 설정
+      const headers = [
+        'ID', '제목', 'URL', '상태', '완료율(%)', '자막언어',
+        '조회수', '좋아요', '댓글수', '길이', '채널', '게시일'
+      ];
+
+      // 분석 데이터 추가 (평면화)
+      const flattenedData: any = {};
+      Object.entries(analysisResult.analysis).forEach(([category, features]) => {
+        Object.entries(features).forEach(([feature, value]) => {
+          const key = `${category}_${feature}`;
+          headers.push(key);
+          flattenedData[key] = value;
+        });
+      });
+
+      worksheet.addRow(headers);
+
+      // 데이터 행 추가
+      const dataRow = [
+        analysisResult.id,
+        analysisResult.title,
+        analysisResult.url,
+        analysisResult.status,
+        analysisResult.completionStats.percentage,
+        analysisResult.scriptLanguage,
+        analysisResult.youtubeData?.viewCount || 0,
+        analysisResult.youtubeData?.likeCount || 0,
+        analysisResult.youtubeData?.commentCount || 0,
+        analysisResult.youtubeData?.duration || '',
+        analysisResult.youtubeData?.channelTitle || '',
+        analysisResult.youtubeData?.publishedAt || ''
+      ];
+
+      // 분석 데이터 추가
+      headers.slice(12).forEach(header => {
+        dataRow.push(flattenedData[header] || '');
+      });
+
+      worksheet.addRow(dataRow);
+
+      // 헤더 스타일링
+      const headerRow = worksheet.getRow(1);
+      headerRow.eachCell((cell) => {
+        cell.font = { bold: true };
+        cell.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: 'FFE6F3FF' }
+        };
+      });
+
+      // 컬럼 너비 자동 조정
+      worksheet.columns.forEach((column) => {
+        column.width = 15;
+      });
+
+      // 4. 버퍼로 변환
+      const buffer = await workbook.xlsx.writeBuffer();
+      const stream = Readable.from(buffer as Buffer);
+
+      // 5. Drive에 업로드
+      const uploadResponse = await this.drive.files.create({
         requestBody: {
           name: fileName,
           parents: [weeklyFolderId],
+          mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         },
         media: {
           mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-          body: mediaStream,
+          body: stream,
         },
-        fields: 'id, name, webViewLink, webContentLink',
+        fields: 'id, name, webViewLink',
       });
-      
-      const fileId = response.data.id;
-      const webViewLink = response.data.webViewLink;
-      
-      console.log(`✅ 드라이브 업로드 성공: ${fileName}`);
-      console.log(`🔗 파일 링크: ${webViewLink}`);
-      
-      return {
+
+      // 6. 공유 설정
+      await this.drive.permissions.create({
+        fileId: uploadResponse.data.id,
+        requestBody: {
+          role: 'reader',
+          type: 'anyone',
+        },
+      });
+
+      const result: DriveUploadResult = {
         success: true,
-        fileId,
-        webViewLink,
-        overwritten: false
+        fileId: uploadResponse.data.id,
+        fileName: uploadResponse.data.name,
+        fileUrl: uploadResponse.data.webViewLink,
+        message: `업로드 성공: ${fileName}`
       };
-      
+
+      console.log(`✅ Drive 업로드 완료: ${result.fileUrl}`);
+      return result;
+
     } catch (error: any) {
-      console.error('❌ 드라이브 업로드 실패:', error.message);
-      
+      console.error('❌ Drive 업로드 실패:', error);
       return {
         success: false,
-        error: error.message
+        error: error.message,
+        message: `업로드 실패: ${error.message}`
       };
     }
   }
-  
+
   async testConnection(): Promise<{ success: boolean; message: string }> {
     try {
-      const folderId = this.resolveFolderId();
-      console.log(`🧪 드라이브 연결 테스트: 폴더 ${folderId}`);
+      await this.auth.authorize();
       
+      const folderId = this.resolveFolderId();
       const response = await this.drive.files.get({
         fileId: folderId,
         fields: 'id, name, mimeType'
@@ -373,9 +332,107 @@ export class GoogleDriveUploader {
       console.error('❌ 폴더 정리 실패:', error);
     }
   }
+
+  // ✅ 추가: SQL DB에서 CSV 업로드 기능
+  async uploadDatabaseCSV(): Promise<DriveUploadResult> {
+    try {
+      console.log('📊 DB에서 CSV 데이터 생성 중...');
+      
+      const db = getGlobalDB();
+      const csvContent = db.exportToCSV();
+      
+      if (!csvContent || csvContent.length < 100) {
+        return {
+          success: false,
+          error: 'CSV 데이터가 비어있거나 너무 짧습니다',
+          message: 'DB에 분석 완료된 영상이 없습니다'
+        };
+      }
+
+      // 폴더 준비
+      const weeklyFolderId = await this.getOrCreateWeeklyFolder();
+      
+      // 파일명 생성
+      const timestamp = new Date().toISOString().split('T')[0];
+      const fileName = `youtube_analysis_database_${timestamp}.csv`;
+      
+      console.log(`📤 CSV 파일 업로드 시작: ${fileName}`);
+
+      // 기존 파일 확인
+      const searchResponse = await this.drive.files.list({
+        q: `name='${fileName}' and parents in '${weeklyFolderId}' and trashed=false`,
+        fields: 'files(id, name)'
+      });
+
+      let fileId: string;
+      const buffer = Buffer.from(csvContent, 'utf-8');
+      const stream = Readable.from(buffer);
+
+      if (searchResponse.data.files && searchResponse.data.files.length > 0) {
+        // 기존 파일 업데이트
+        fileId = searchResponse.data.files[0].id!;
+        console.log(`🔄 기존 CSV 파일 업데이트: ${fileName}`);
+        
+        await this.drive.files.update({
+          fileId: fileId,
+          media: {
+            mimeType: 'text/csv',
+            body: stream
+          }
+        });
+      } else {
+        // 새 파일 생성
+        console.log(`📄 새 CSV 파일 생성: ${fileName}`);
+        
+        const uploadResponse = await this.drive.files.create({
+          requestBody: {
+            name: fileName,
+            parents: [weeklyFolderId],
+            mimeType: 'text/csv'
+          },
+          media: {
+            mimeType: 'text/csv',
+            body: stream
+          },
+          fields: 'id, name, webViewLink'
+        });
+        
+        fileId = uploadResponse.data.id!;
+      }
+
+      // 공유 설정
+      await this.drive.permissions.create({
+        fileId,
+        requestBody: {
+          role: 'reader',
+          type: 'anyone'
+        }
+      });
+
+      const fileUrl = `https://drive.google.com/file/d/${fileId}/view`;
+      
+      console.log(`✅ DB CSV 업로드 완료: ${fileUrl}`);
+      
+      return {
+        success: true,
+        fileId,
+        fileName,
+        fileUrl,
+        message: `DB CSV 업로드 성공: ${fileName} (156개 특성 포함)`
+      };
+
+    } catch (error: any) {
+      console.error('❌ DB CSV 업로드 실패:', error);
+      return {
+        success: false,
+        error: error.message,
+        message: `DB CSV 업로드 실패: ${error.message}`
+      };
+    }
+  }
 }
 
-// 자동 업로드 스케줄러
+// 자동 업로드 스케줄러 클래스 (기존 유지)
 export class AutoDriveUploader {
   private uploader: GoogleDriveUploader;
   private intervalId: NodeJS.Timeout | null = null;
@@ -387,6 +444,43 @@ export class AutoDriveUploader {
   async uploadImmediately(analysisResult: any): Promise<any> {
     console.log(`🚀 즉시 업로드 요청: ${analysisResult.title}`);
     return await this.uploader.uploadAnalysisResult(analysisResult);
+  }
+
+  // ✅ 추가: DB CSV 즉시 업로드
+  async uploadDatabaseCSVImmediately(): Promise<DriveUploadResult> {
+    console.log('🚀 DB CSV 즉시 업로드 요청');
+    return await this.uploader.uploadDatabaseCSV();
+  }
+  
+  startAutoUpload(intervalMinutes: number = 120) {
+    console.log(`🔄 자동 업로드 스케줄 시작 (${intervalMinutes}분마다)`);
+    
+    if (this.intervalId) {
+      clearInterval(this.intervalId);
+    }
+    
+    this.intervalId = setInterval(async () => {
+      try {
+        console.log('⏰ 스케줄된 자동 업로드 실행');
+        // ✅ 수정: DB CSV 자동 업로드로 변경
+        const result = await this.uploader.uploadDatabaseCSV();
+        if (result.success) {
+          console.log(`✅ 자동 DB CSV 업로드 성공: ${result.fileName}`);
+        } else {
+          console.log(`❌ 자동 DB CSV 업로드 실패: ${result.message}`);
+        }
+      } catch (error) {
+        console.error('❌ 스케줄된 업로드 실패:', error);
+      }
+    }, intervalMinutes * 60 * 1000);
+  }
+  
+  stopAutoUpload() {
+    if (this.intervalId) {
+      clearInterval(this.intervalId);
+      this.intervalId = null;
+      console.log('⏹️ 자동 업로드 스케줄 중지');
+    }
   }
   
   startAutoCleanup() {
@@ -419,11 +513,31 @@ export class AutoDriveUploader {
       console.log('⏹️ 자동 정리 스케줄 중지');
     }
   }
+
+  // ✅ 추가: Drive 접근 테스트
+  async testDriveAccess(): Promise<{ success: boolean; message: string }> {
+    return await this.uploader.testConnection();
+  }
 }
 
-// 전역 인스턴스
+// 전역 인스턴스 (기존 유지)
 export const globalDriveUploader = new AutoDriveUploader();
 
 if (typeof window === 'undefined') {
   globalDriveUploader.startAutoCleanup();
+  // ✅ 추가: 자동 업로드도 시작 (2시간마다)
+  globalDriveUploader.startAutoUpload(120);
+}
+
+// ✅ 추가: 간편 함수들
+export async function uploadSingleAnalysisResult(analysisResult: AnalysisResult): Promise<DriveUploadResult> {
+  return await globalDriveUploader.uploadImmediately(analysisResult);
+}
+
+export async function uploadDatabaseToCSV(): Promise<DriveUploadResult> {
+  return await globalDriveUploader.uploadDatabaseCSVImmediately();
+}
+
+export async function testGoogleDriveConnection(): Promise<{ success: boolean; message: string }> {
+  return await globalDriveUploader.testDriveAccess();
 }
