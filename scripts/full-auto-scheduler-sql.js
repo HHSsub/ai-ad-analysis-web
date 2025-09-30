@@ -96,8 +96,8 @@ async function analyzeVideos() {
     let analyzed = 0;
     let failed = 0;
 
-    // 배치 단위로 분석 (5개씩)
-    const batchSize = 5;
+    // 배치 단위로 분석 (3개씩)
+    const batchSize = 3;
     for (let i = 0; i < pendingAds.length; i += batchSize) {
       const batch = pendingAds.slice(i, i + batchSize);
       
