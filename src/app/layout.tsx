@@ -5,7 +5,7 @@ import './globals.css'
 const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
-  title: 'YouTube 영상 분석기',
+  title: 'NEXAD',
   description: 'AI 기반 YouTube 영상 분석 도구 - 156가지 특징을 자동 추출',
 }
 
