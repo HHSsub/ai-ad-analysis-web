@@ -76,14 +76,35 @@ export class GoogleDriveUploader {
       throw new Error('Google Drive 서비스 계정 정보가 없습니다');
     }
 
-    this.auth = new JWT({
+  constructor() {
+    const credentials = this.parseCredentials();
+    
+    // Domain-Wide Delegation 설정
+    const impersonateUser = process.env.GOOGLE_WORKSPACE_ADMIN_EMAIL;
+    
+    const authConfig: any = {
       email: credentials.client_email,
       key: credentials.private_key,
       scopes: [
-        'https://www.googleapis.com/auth/drive',
-        'https://www.googleapis.com/auth/drive.file'
-      ],
-    });
+        'https://www.googleapis.com/auth/drive.file',
+        'https://www.googleapis.com/auth/drive'
+      ]
+    };
+    
+    // Impersonation 추가 (핵심!)
+    if (impersonateUser) {
+      authConfig.subject = impersonateUser;
+      console.log(`🔐 Impersonate: ${impersonateUser}`);
+    } else {
+      console.warn('⚠️ GOOGLE_WORKSPACE_ADMIN_EMAIL 미설정 - impersonation 불가');
+    }
+    
+    this.auth = new JWT(authConfig);
+    
+    this.drive = google.drive({ version: 'v3', auth: this.auth });
+    
+    console.log(`🔐 Drive 인증 설정 완료: ${credentials.client_email}`);
+  }
 
     this.drive = google.drive({ version: 'v3', auth: this.auth });
     console.log(`🔐 Drive 인증 설정 완료: ${credentials.client_email}`);
