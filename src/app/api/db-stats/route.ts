@@ -91,4 +91,16 @@ export async function GET(request: NextRequest) {
       }
     };
 
-    console.log
+    console.log(`📊 DB 통계 조회 완료: ${basicStats.total}개 총 영상, ${basicStats.completed}개 완료, ${basicStats.failed}개 실패, ${basicStats.pending}개 대기`);
+
+    return NextResponse.json(response);
+
+  } catch (error: any) {
+    console.error('❌ DB 통계 조회 실패:', error);
+    return NextResponse.json({
+      error: 'Failed to fetch database statistics',
+      message: error.message,
+      healthy: false
+    }, { status: 500 });
+  }
+}
