@@ -5,7 +5,7 @@ import { google } from 'googleapis';
 import { getSubtitles } from 'youtube-captions-scraper';
 import path from 'path';
 import fs from 'fs';
-import { AnalyzedVideo, VIDEO_FEATURES } from '@/types/video';
+import { AnalyzedVideo } from '@/types/video';
 import { calculateHybridScore } from '@/services/metricsService';
 import { getGlobalDB } from '@/lib/sql-database';
 
