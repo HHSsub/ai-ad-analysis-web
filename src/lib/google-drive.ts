@@ -1,11 +1,10 @@
-// src/lib/google-drive.ts - 공유 드라이브 지원 추가
+// src/lib/google-drive.ts
 import { google } from 'googleapis';
 import { JWT } from 'google-auth-library';
 import ExcelJS from 'exceljs';
 import { Readable } from 'stream';
 import { getGlobalDB } from './sql-database';
 
-// 기존 타입들 모두 유지
 interface AnalysisResult {
   id: string;
   title: string;
@@ -47,10 +46,6 @@ export class GoogleDriveUploader {
   private drive: any;
 
   constructor(serviceAccountKey?: any) {
-    this.initializeAuth(serviceAccountKey);
-  }
-
-  private initializeAuth(serviceAccountKey?: any) {
     let credentials: any;
 
     if (serviceAccountKey) {
@@ -76,10 +71,6 @@ export class GoogleDriveUploader {
       throw new Error('Google Drive 서비스 계정 정보가 없습니다');
     }
 
-  constructor() {
-    const credentials = this.parseCredentials();
-    
-    // Domain-Wide Delegation 설정
     const impersonateUser = process.env.GOOGLE_WORKSPACE_ADMIN_EMAIL;
     
     const authConfig: any = {
@@ -91,7 +82,6 @@ export class GoogleDriveUploader {
       ]
     };
     
-    // Impersonation 추가 (핵심!)
     if (impersonateUser) {
       authConfig.subject = impersonateUser;
       console.log(`🔐 Impersonate: ${impersonateUser}`);
@@ -100,13 +90,8 @@ export class GoogleDriveUploader {
     }
     
     this.auth = new JWT(authConfig);
-    
     this.drive = google.drive({ version: 'v3', auth: this.auth });
     
-    console.log(`🔐 Drive 인증 설정 완료: ${credentials.client_email}`);
-  }
-
-    this.drive = google.drive({ version: 'v3', auth: this.auth });
     console.log(`🔐 Drive 인증 설정 완료: ${credentials.client_email}`);
   }
 
@@ -120,7 +105,6 @@ export class GoogleDriveUploader {
     
     console.log(`🔍 폴더 ID 해석 중: ${candidate}`);
     
-    // URL에서 폴더 ID 추출
     const foldersMatch = candidate.match(/\/folders\/([a-zA-Z0-9_-]+)/);
     if (foldersMatch?.[1]) {
       console.log(`✅ URL에서 폴더 ID 추출: ${foldersMatch[1]}`);
@@ -149,7 +133,6 @@ export class GoogleDriveUploader {
     console.log(`📁 주간 폴더 확인: ${weeklyFolderName} in ${parentFolderId}`);
     
     try {
-      // ✅ 공유 드라이브 지원 추가
       const searchResponse = await this.drive.files.list({
         q: `name='${weeklyFolderName}' and parents in '${parentFolderId}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
         fields: 'files(id, name)',
@@ -163,7 +146,6 @@ export class GoogleDriveUploader {
         return folderId;
       }
       
-      // ✅ 공유 드라이브 지원 추가
       const createResponse = await this.drive.files.create({
         requestBody: {
           name: weeklyFolderName,
@@ -189,26 +171,21 @@ export class GoogleDriveUploader {
     try {
       console.log(`🚀 Google Drive 업로드 시작: ${analysisResult.title}`);
       
-      // 1. 폴더 준비
       const weeklyFolderId = await this.getOrCreateWeeklyFolder();
       
-      // 2. 파일명 생성
       const now = new Date();
       const timestamp = now.toISOString().replace(/[:.]/g, '-').slice(0, -5);
       const safeTitle = analysisResult.title.replace(/[\\/:*?"<>|]/g, '_').slice(0, 50);
       const fileName = `youtube_analysis_${safeTitle}_${timestamp}.xlsx`;
       
-      // 3. 엑셀 파일 생성
       const workbook = new ExcelJS.Workbook();
       const worksheet = workbook.addWorksheet('AI Ad Analysis');
 
-      // 헤더 설정
       const headers = [
         'ID', '제목', 'URL', '상태', '완료율(%)', '자막언어',
         '조회수', '좋아요', '댓글수', '길이', '채널', '게시일'
       ];
 
-      // 분석 데이터 추가 (평면화)
       const flattenedData: any = {};
       Object.entries(analysisResult.analysis).forEach(([category, features]) => {
         Object.entries(features).forEach(([feature, value]) => {
@@ -220,7 +197,6 @@ export class GoogleDriveUploader {
 
       worksheet.addRow(headers);
 
-      // 데이터 행 추가
       const dataRow = [
         analysisResult.id,
         analysisResult.title,
@@ -236,14 +212,12 @@ export class GoogleDriveUploader {
         analysisResult.youtubeData?.publishedAt || ''
       ];
 
-      // 분석 데이터 추가
       headers.slice(12).forEach(header => {
         dataRow.push(flattenedData[header] || '');
       });
 
       worksheet.addRow(dataRow);
 
-      // 헤더 스타일링
       const headerRow = worksheet.getRow(1);
       headerRow.eachCell((cell) => {
         cell.font = { bold: true };
@@ -254,16 +228,13 @@ export class GoogleDriveUploader {
         };
       });
 
-      // 컬럼 너비 자동 조정
       worksheet.columns.forEach((column) => {
         column.width = 15;
       });
 
-      // 4. 버퍼로 변환
       const buffer = await workbook.xlsx.writeBuffer();
       const stream = Readable.from(buffer as Buffer);
 
-      // 5. ✅ Drive에 업로드 (공유 드라이브 지원)
       const uploadResponse = await this.drive.files.create({
         requestBody: {
           name: fileName,
@@ -278,7 +249,6 @@ export class GoogleDriveUploader {
         supportsAllDrives: true
       });
 
-      // 6. ✅ 공유 설정 (공유 드라이브 지원)
       await this.drive.permissions.create({
         fileId: uploadResponse.data.id,
         requestBody: {
@@ -314,7 +284,6 @@ export class GoogleDriveUploader {
       await this.auth.authorize();
       
       const folderId = this.resolveFolderId();
-      // ✅ 공유 드라이브 지원 추가
       const response = await this.drive.files.get({
         fileId: folderId,
         fields: 'id, name, mimeType',
@@ -345,7 +314,6 @@ export class GoogleDriveUploader {
       thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
       const cutoffDate = thirtyDaysAgo.toISOString();
 
-      // ✅ 공유 드라이브 지원 추가
       const response = await this.drive.files.list({
         q: `parents in '${parentFolderId}' and mimeType='application/vnd.google-apps.folder' and createdTime < '${cutoffDate}' and trashed=false`,
         fields: 'files(id, name, createdTime)',
@@ -355,7 +323,6 @@ export class GoogleDriveUploader {
       
       if (response.data.files && response.data.files.length > 0) {
         for (const folder of response.data.files) {
-          // ✅ 공유 드라이브 지원 추가
           await this.drive.files.delete({ 
             fileId: folder.id,
             supportsAllDrives: true
@@ -369,7 +336,6 @@ export class GoogleDriveUploader {
     }
   }
 
-  // ✅ DB CSV 업로드 기능 (공유 드라이브 지원)
   async uploadDatabaseCSV(): Promise<DriveUploadResult> {
     try {
       console.log('📊 DB에서 CSV 데이터 생성 중...');
@@ -385,16 +351,13 @@ export class GoogleDriveUploader {
         };
       }
 
-      // 폴더 준비
       const weeklyFolderId = await this.getOrCreateWeeklyFolder();
       
-      // 파일명 생성
       const timestamp = new Date().toISOString().split('T')[0];
       const fileName = `youtube_analysis_database_${timestamp}.csv`;
       
       console.log(`📤 CSV 파일 업로드 시작: ${fileName}`);
 
-      // ✅ 기존 파일 확인 (공유 드라이브 지원)
       const searchResponse = await this.drive.files.list({
         q: `name='${fileName}' and parents in '${weeklyFolderId}' and trashed=false`,
         fields: 'files(id, name)',
@@ -407,7 +370,6 @@ export class GoogleDriveUploader {
       const stream = Readable.from(buffer);
 
       if (searchResponse.data.files && searchResponse.data.files.length > 0) {
-        // ✅ 기존 파일 업데이트 (공유 드라이브 지원)
         fileId = searchResponse.data.files[0].id!;
         console.log(`🔄 기존 CSV 파일 업데이트: ${fileName}`);
         
@@ -420,7 +382,6 @@ export class GoogleDriveUploader {
           supportsAllDrives: true
         });
       } else {
-        // ✅ 새 파일 생성 (공유 드라이브 지원)
         console.log(`📄 새 CSV 파일 생성: ${fileName}`);
         
         const uploadResponse = await this.drive.files.create({
@@ -440,7 +401,6 @@ export class GoogleDriveUploader {
         fileId = uploadResponse.data.id!;
       }
 
-      // ✅ 공유 설정 (공유 드라이브 지원)
       await this.drive.permissions.create({
         fileId,
         requestBody: {
@@ -473,7 +433,6 @@ export class GoogleDriveUploader {
   }
 }
 
-// 자동 업로드 스케줄러 클래스 (기존 유지)
 export class AutoDriveUploader {
   private uploader: GoogleDriveUploader;
   private intervalId: NodeJS.Timeout | null = null;
@@ -558,7 +517,6 @@ export class AutoDriveUploader {
   }
 }
 
-// 전역 인스턴스 (기존 유지)
 export const globalDriveUploader = new AutoDriveUploader();
 
 if (typeof window === 'undefined') {
@@ -566,7 +524,6 @@ if (typeof window === 'undefined') {
   globalDriveUploader.startAutoUpload(120);
 }
 
-// 간편 함수들
 export async function uploadSingleAnalysisResult(analysisResult: AnalysisResult): Promise<DriveUploadResult> {
   return await globalDriveUploader.uploadImmediately(analysisResult);
 }
