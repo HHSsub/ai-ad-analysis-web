@@ -61,7 +61,7 @@ const INITIAL_ROWS = 10;
 
 export default function Home() {
   const [videos, setVideos] = useState<VideoRow[]>(() => 
-    Array(INITIAL_ROWS).fill({ title: '', url: '', notes: '' })
+    Array(INITIAL_ROWS).fill(null).map(() => ({ title: '', url: '', notes: '' }))
   );
   const [analysisStatus, setAnalysisStatus] = useState<AnalysisStatus>('welcome');
   const [results, setResults] = useState<AnalysisResult[]>([]);
@@ -798,7 +798,7 @@ export default function Home() {
                           key={item.value.id} 
                           onClick={() => setSelectedVideo(item)} 
                           className={`p-3 rounded-lg cursor-pointer transition-all border ${
-                            selectedVideo?.value?.id === item.value.id 
+                            selectedVideo?.status === 'fulfilled' && selectedVideo.value.id === item.value.id 
                               ? 'bg-blue-900/30 border-blue-600' 
                               : 'bg-gray-900 border-gray-700 hover:bg-gray-750'
                           }`}
@@ -841,7 +841,7 @@ export default function Home() {
                           key={item.reason.id} 
                           onClick={() => setSelectedVideo(item)} 
                           className={`p-3 rounded-lg cursor-pointer transition-all border ${
-                            selectedVideo?.reason?.id === item.reason.id 
+                            selectedVideo?.status === 'rejected' && selectedVideo.reason.id === item.reason.id 
                               ? 'bg-red-900/30 border-red-600' 
                               : 'bg-gray-900 border-gray-700 hover:bg-gray-750'
                           }`}
