@@ -1,29 +1,29 @@
+// src/services/excelService.ts - CSV만 사용
+
 import * as XLSX from 'xlsx';
-import { AnalyzedVideo, VIDEO_FEATURES } from '@/types/video';
+import { AnalyzedVideo } from '@/types/video';
 import { calculateHybridScore } from './metricsService';
+import { loadFeaturesFromCSV } from '@/utils/csvLoader';
 
 export function exportToExcel(videos: AnalyzedVideo[]): void {
-  // 워크북 생성
   const workbook = XLSX.utils.book_new();
   
-  // 메인 데이터 시트 생성
   const mainData = createMainDataSheet(videos);
   XLSX.utils.book_append_sheet(workbook, mainData, '분석결과');
   
-  // 점수 요약 시트 생성
   const scoreData = createScoreDataSheet(videos);
   XLSX.utils.book_append_sheet(workbook, scoreData, '점수요약');
   
-  // 메타데이터 시트 생성
   const metaData = createMetaDataSheet(videos);
   XLSX.utils.book_append_sheet(workbook, metaData, '메타데이터');
   
-  // 파일 다운로드
   const fileName = `YouTube_분석결과_${new Date().toISOString().split('T')[0]}.xlsx`;
   XLSX.writeFile(workbook, fileName);
 }
 
 function createMainDataSheet(videos: AnalyzedVideo[]) {
+  const VIDEO_FEATURES = loadFeaturesFromCSV(); // ✅ CSV에서 로드
+  
   const headers = [
     '영상제목',
     '영상링크', 
@@ -37,17 +37,16 @@ function createMainDataSheet(videos: AnalyzedVideo[]) {
     const row = [
       video.title,
       video.url,
-      video.note || '',
+      video.notes || '',
       video.status === 'completed' ? '완료' : 
       video.status === 'failed' ? '실패' : 
       video.status === 'incomplete' ? '불완전' : '분석중',
       new Date(video.createdAt).toLocaleString('ko-KR')
     ];
     
-    // 156개 feature 값 추가
     VIDEO_FEATURES.forEach(feature => {
       const key = `feature_${feature.no}`;
-      row.push(video.features[key] || 'N/A');
+      row.push(video.features?.[key] || 'N/A');
     });
     
     return row;
@@ -82,29 +81,30 @@ function createScoreDataSheet(videos: AnalyzedVideo[]) {
         video.title,
         video.status === 'failed' ? '실패' : 
         video.status === 'incomplete' ? '불완전' : '분석중',
-        'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A'
+        'N/A', 'N/A', 'N/A', 'N/A', 'N/A',
+        'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A'
       ];
     }
     
-    const scores = calculateHybridScore(video);
+    const score = video.hybridScore || calculateHybridScore(video);
     
     return [
       video.title,
       '완료',
-      scores.final.toFixed(1),
-      scores.quantitative.interestIndex.toFixed(1),
-      scores.quantitative.retentionIndex.toFixed(1),
-      scores.quantitative.growthIndex.toFixed(1),
-      scores.quantitative.finalScore.toFixed(1),
-      scores.qualitative.openingHookIndex.toFixed(1),
-      scores.qualitative.brandDeliveryIndex.toFixed(1),
-      scores.qualitative.storyStructureIndex.toFixed(1),
-      scores.qualitative.visualAestheticsIndex.toFixed(1),
-      scores.qualitative.audioPersuasionIndex.toFixed(1),
-      scores.qualitative.uniquenessIndex.toFixed(1),
-      scores.qualitative.messageTargetFitIndex.toFixed(1),
-      scores.qualitative.ctaEfficiencyIndex.toFixed(1),
-      scores.qualitative.qualityScore.toFixed(1)
+      score.final.toFixed(2),
+      score.quantitative.interestIndex.toFixed(2),
+      score.quantitative.retentionIndex.toFixed(2),
+      score.quantitative.growthIndex.toFixed(2),
+      score.quantitative.finalScore.toFixed(2),
+      score.qualitative.openingHookIndex.toFixed(2),
+      score.qualitative.brandDeliveryIndex.toFixed(2),
+      score.qualitative.storyStructureIndex.toFixed(2),
+      score.qualitative.visualAestheticsIndex.toFixed(2),
+      score.qualitative.audioPersuasionIndex.toFixed(2),
+      score.qualitative.uniquenessIndex.toFixed(2),
+      score.qualitative.messageTargetFitIndex.toFixed(2),
+      score.qualitative.ctaEfficiencyIndex.toFixed(2),
+      score.qualitative.qualityScore.toFixed(2)
     ];
   });
   
@@ -115,38 +115,42 @@ function createMetaDataSheet(videos: AnalyzedVideo[]) {
   const headers = [
     '영상제목',
     '채널명',
-    '게시일',
-    '카테고리ID', 
+    '업로드일',
     '조회수',
-    '좋아요수',
+    '좋아요',
     '댓글수',
     '영상길이',
-    '설명',
-    '태그'
+    '스크립트언어'
   ];
   
   const rows = videos.map(video => {
-    const youtube = video.youtubeData;
-    if (!youtube) {
-      return [
-        video.title,
-        'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A'
-      ];
+    if (!video.youtubeData) {
+      return [video.title, 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A'];
     }
     
     return [
       video.title,
-      youtube.channelTitle,
-      new Date(youtube.publishedAt).toLocaleString('ko-KR'),
-      youtube.categoryId,
-      youtube.viewCount,
-      youtube.likeCount, 
-      youtube.commentCount,
-      youtube.duration,
-      youtube.description.substring(0, 500) + (youtube.description.length > 500 ? '...' : ''),
-      youtube.tags.join(', ')
+      video.youtubeData.channelTitle,
+      new Date(video.youtubeData.publishedAt).toLocaleDateString('ko-KR'),
+      video.youtubeData.viewCount.toLocaleString(),
+      video.youtubeData.likeCount.toLocaleString(),
+      video.youtubeData.commentCount.toLocaleString(),
+      video.youtubeData.duration,
+      video.scriptLanguage || 'N/A'
     ];
   });
   
   return XLSX.utils.aoa_to_sheet([headers, ...rows]);
+}
+
+export function exportSingleVideo(video: AnalyzedVideo): void {
+  exportToExcel([video]);
+}
+
+export function exportFilteredVideos(
+  videos: AnalyzedVideo[],
+  filter: (video: AnalyzedVideo) => boolean
+): void {
+  const filtered = videos.filter(filter);
+  exportToExcel(filtered);
 }
