@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Loader2, AlertCircle, CheckCircle, Download, Plus, Trash2, BarChart3, Sparkles, Video, Brain, Globe } from "lucide-react";
+import { Loader2, AlertCircle, CheckCircle, Download, Plus, Trash2, BarChart3, Sparkles, Video, Brain, Globe, Database, Play } from "lucide-react";
 import toast from 'react-hot-toast';
 
 import ResultsFooter from "@/components/ResultsFooter";
@@ -49,6 +49,13 @@ type RejectedResult = {
 
 type AnalysisResult = FulfilledResult | RejectedResult;
 
+interface AutomationStats {
+  total_ads: number;
+  pending: number;
+  completed: number;
+  failed: number;
+}
+
 const SESSION_KEY = 'ai-ad-analysis-session-v1';
 const INITIAL_ROWS = 10;
 
@@ -60,6 +67,9 @@ export default function Home() {
   const [results, setResults] = useState<AnalysisResult[]>([]);
   const [selectedVideo, setSelectedVideo] = useState<AnalysisResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  
+  const [isAutoCollecting, setIsAutoCollecting] = useState(false);
+  const [automationStats, setAutomationStats] = useState<AutomationStats | null>(null);
 
   const completedVideos = results.filter((r): r is FulfilledResult => r.status === 'fulfilled');
   const failedVideos = results.filter((r): r is RejectedResult => r.status === 'rejected');
@@ -95,8 +105,112 @@ export default function Home() {
     }
   };
 
-  const clearSession = () => {
-    localStorage.removeItem(SESSION_KEY);
+  const fetchAutomationStats = async () => {
+    try {
+      const response = await fetch('/api/automation/collect', {
+        method: 'GET'
+      });
+      
+      const result = await response.json();
+      if (result.success && result.data?.stats) {
+        setAutomationStats(result.data.stats);
+      }
+    } catch (error) {
+      console.error('자동화 상태 조회 실패:', error);
+    }
+  };
+
+  const handleAutoCollect = async () => {
+    setIsAutoCollecting(true);
+    toast.loading('YouTube 광고 자동 수집 중...', { id: 'auto-collect' });
+    
+    try {
+      const response = await fetch('/api/automation/collect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          maxAds: 25,
+          searchQueries: [
+            "advertisement commercial",
+            "product promotion", 
+            "brand commercial",
+            "sponsored content",
+            "new product launch"
+          ]
+        })
+      });
+      
+      const result = await response.json();
+      
+      if (result.success) {
+        toast.success(result.message, { id: 'auto-collect' });
+        
+        if (result.data?.stats) {
+          setAutomationStats(result.data.stats);
+        }
+        
+        if (result.data?.stats?.pending > 0) {
+          const shouldStartAnalysis = confirm(
+            `${result.data.stats.pending}개의 새로운 광고를 수집했습니다.\n바로 분석을 시작하시겠습니까?`
+          );
+          
+          if (shouldStartAnalysis) {
+            handleAutoAnalysis();
+          }
+        }
+        
+      } else {
+        toast.error(`수집 실패: ${result.message}`, { id: 'auto-collect' });
+      }
+    } catch (error) {
+      toast.error('자동 수집 중 오류 발생', { id: 'auto-collect' });
+      console.error('자동 수집 오류:', error);
+    } finally {
+      setIsAutoCollecting(false);
+    }
+  };
+
+  const handleAutoAnalysis = async () => {
+    if (!automationStats?.pending) {
+      toast.error('분석할 대기 중인 광고가 없습니다.');
+      return;
+    }
+    
+    toast.loading('수집된 광고를 분석 시스템으로 전송 중...', { id: 'auto-analysis' });
+    
+    try {
+      const pendingResponse = await fetch(`/api/automation/collect?limit=${automationStats.pending}`);
+      
+      const pendingData = await pendingResponse.json();
+      
+      if (pendingData.success && pendingData.data?.recentAds) {
+        const pendingAds = pendingData.data.recentAds
+          .filter((ad: any) => ad.analysis_status === 'pending')
+          .map((ad: any) => ({
+            title: ad.title || '',
+            url: ad.url || '',
+            notes: ad.note || '자동 수집된 광고'
+          }));
+        
+        if (pendingAds.length > 0) {
+          setVideos(pendingAds);
+          setAnalysisStatus('input');
+          toast.success(`${pendingAds.length}개 광고를 분석 대상으로 불러왔습니다.`, { id: 'auto-analysis' });
+          
+          setTimeout(() => {
+            handleAnalyze();
+          }, 1000);
+        } else {
+          toast.error('분석 가능한 광고가 없습니다.', { id: 'auto-analysis' });
+        }
+      } else {
+        toast.error('광고 데이터 불러오기 실패', { id: 'auto-analysis' });
+      }
+      
+    } catch (error) {
+      toast.error('자동 분석 준비 중 오류 발생', { id: 'auto-analysis' });
+      console.error('자동 분석 오류:', error);
+    }
   };
 
   useEffect(() => {
@@ -116,6 +230,8 @@ export default function Home() {
         loadSession();
       }
     } catch {}
+
+    fetchAutomationStats();
 
     const beforeUnload = () => { saveSession(); };
     window.addEventListener('beforeunload', beforeUnload);
@@ -401,9 +517,39 @@ export default function Home() {
           </h1>
         </div>
 
+        {automationStats && analysisStatus === 'welcome' && (
+          <Card className="mb-8 bg-gray-800 border-gray-700 border-l-4 border-l-green-500">
+            <CardHeader>
+              <CardTitle className="text-lg text-green-400 flex items-center">
+                <Database className="mr-2 h-5 w-5" />
+                자동 수집 현황
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-blue-400">{automationStats.total_ads}</div>
+                  <div className="text-sm text-gray-400">전체 수집</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-orange-400">{automationStats.pending}</div>
+                  <div className="text-sm text-gray-400">분석 대기</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-green-400">{automationStats.completed}</div>
+                  <div className="text-sm text-gray-400">분석 완료</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-red-400">{automationStats.failed}</div>
+                  <div className="text-sm text-gray-400">분석 실패</div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {analysisStatus === 'welcome' && (
           <div className="relative overflow-hidden">
-            {/* Hero Section */}
             <div className="text-center py-20 relative z-10">
               <div className="inline-block mb-6">
                 <div className="flex items-center justify-center space-x-2 px-4 py-2 bg-blue-500/10 border border-blue-500/30 rounded-full">
@@ -426,23 +572,45 @@ export default function Home() {
 
               <div className="flex justify-center space-x-6 mb-16">
                 <Button 
+                  onClick={handleAutoCollect}
+                  disabled={isAutoCollecting}
+                  size="lg"
+                  className="bg-gradient-to-r from-green-600 to-green-500 hover:from-green-500 hover:to-green-400 text-white font-bold px-10 py-6 text-lg rounded-xl shadow-lg shadow-green-500/50 transition-all transform hover:scale-105"
+                >
+                  {isAutoCollecting ? (
+                    <>
+                      <Loader2 className="mr-3 h-6 w-6 animate-spin" />
+                      수집 중...
+                    </>
+                  ) : (
+                    <>
+                      <Database className="mr-3 h-6 w-6" />
+                      자동 수집
+                    </>
+                  )}
+                </Button>
+
+                {automationStats?.pending && automationStats.pending > 0 && (
+                  <Button 
+                    onClick={handleAutoAnalysis}
+                    size="lg"
+                    className="bg-gradient-to-r from-purple-600 to-purple-500 hover:from-purple-500 hover:to-purple-400 text-white font-bold px-10 py-6 text-lg rounded-xl shadow-lg shadow-purple-500/50 transition-all transform hover:scale-105"
+                  >
+                    <Play className="mr-3 h-6 w-6" />
+                    수집된 광고 분석 ({automationStats.pending}개)
+                  </Button>
+                )}
+                
+                <Button 
                   onClick={() => setAnalysisStatus('input')} 
                   size="lg"
                   className="bg-gradient-to-r from-blue-600 to-blue-500 hover:from-blue-500 hover:to-blue-400 text-white font-bold px-10 py-6 text-lg rounded-xl shadow-lg shadow-blue-500/50 transition-all transform hover:scale-105"
                 >
                   <Video className="mr-3 h-6 w-6" />
-                  분석 시작하기
-                </Button>
-                
-                <Button 
-                  disabled 
-                  className="bg-gray-800 border border-gray-700 text-gray-500 font-medium px-10 py-6 text-lg rounded-xl cursor-not-allowed"
-                >
-                  자동 수집 (준비중)
+                  링크 수동 추가
                 </Button>
               </div>
 
-              {/* Features Grid */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-8 max-w-6xl mx-auto mt-20">
                 <div className="bg-gradient-to-br from-blue-900/30 to-blue-800/10 border border-blue-700/30 rounded-2xl p-8 hover:border-blue-500/50 transition-all transform hover:scale-105">
                   <div className="bg-blue-500/10 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-6">
@@ -478,7 +646,6 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* Stats */}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-6 max-w-4xl mx-auto mt-20 px-4">
                 <div className="text-center">
                   <div className="text-5xl font-black text-blue-400 mb-2">156</div>
@@ -499,7 +666,6 @@ export default function Home() {
               </div>
             </div>
 
-            {/* Background Effects */}
             <div className="absolute top-0 left-0 w-full h-full pointer-events-none overflow-hidden">
               <div className="absolute top-20 left-10 w-96 h-96 bg-blue-500/5 rounded-full blur-3xl"></div>
               <div className="absolute bottom-20 right-10 w-96 h-96 bg-purple-500/5 rounded-full blur-3xl"></div>
