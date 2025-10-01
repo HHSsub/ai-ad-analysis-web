@@ -4,7 +4,6 @@ import { PythonExecutor } from '@/lib/python-executor';
 export async function POST(request: NextRequest) {
   try {
     const { maxAds = 20, searchQueries } = await request.json();
-    
     console.log(`🚀 Python 광고 수집 시작 - 최대 ${maxAds}개`);
     
     const executor = new PythonExecutor();
@@ -30,7 +29,6 @@ export async function POST(request: NextRequest) {
         error: result.error
       }, { status: 500 });
     }
-    
   } catch (error) {
     console.error('수집 API 에러:', error);
     return NextResponse.json({
@@ -41,8 +39,14 @@ export async function POST(request: NextRequest) {
   }
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
+    // URL에서 limit 파라미터 읽기
+    const searchParams = request.nextUrl.searchParams;
+    const limit = parseInt(searchParams.get('limit') || '10', 10);
+    
+    console.log(`📊 광고 데이터 조회 요청 - limit: ${limit}개`);
+    
     const executor = new PythonExecutor();
     const stats = await executor.getStats();
     const recentAds = await executor.readDatabase();
@@ -51,7 +55,7 @@ export async function GET() {
       success: true,
       data: {
         stats,
-        recentAds: recentAds.slice(0, 10) // 최근 10개만
+        recentAds: recentAds.slice(0, limit) // limit 파라미터 사용
       }
     });
   } catch (error) {
@@ -61,4 +65,3 @@ export async function GET() {
     }, { status: 500 });
   }
 }
-    
