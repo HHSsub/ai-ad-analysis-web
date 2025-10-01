@@ -52,7 +52,7 @@ export class GoogleDriveUploader {
       credentials = serviceAccountKey;
     } else {
       const serviceAccountJson = process.env.GOOGLE_SERVICE_ACCOUNT_CREDENTIALS;
-      
+
       if (serviceAccountJson) {
         try {
           credentials = JSON.parse(serviceAccountJson);
@@ -72,66 +72,70 @@ export class GoogleDriveUploader {
     }
 
     const impersonateUser = process.env.GOOGLE_WORKSPACE_ADMIN_EMAIL;
-    
+
+    if (!impersonateUser) {
+      console.error('❌ GOOGLE_WORKSPACE_ADMIN_EMAIL 환경변수가 설정되지 않았습니다!');
+      console.error('📋 설정 방법:');
+      console.error('   1. .env.local 파일에 추가: GOOGLE_WORKSPACE_ADMIN_EMAIL=admin@yourcompany.com');
+      console.error('   2. 조직 공유 폴더 접근을 위해 반드시 필요합니다');
+      throw new Error('GOOGLE_WORKSPACE_ADMIN_EMAIL 설정 필요: 조직 공유 폴더 접근을 위해 반드시 필요합니다');
+    }
+
     const authConfig: any = {
       email: credentials.client_email,
       key: credentials.private_key,
       scopes: [
         'https://www.googleapis.com/auth/drive.file',
         'https://www.googleapis.com/auth/drive'
-      ]
+      ],
+      subject: impersonateUser
     };
-    
-    if (impersonateUser) {
-      authConfig.subject = impersonateUser;
-      console.log(`🔐 Impersonate: ${impersonateUser}`);
-    } else {
-      console.warn('⚠️ GOOGLE_WORKSPACE_ADMIN_EMAIL 미설정 - impersonation 불가');
-    }
-    
+
+    console.log(`🔐 JWT Impersonation 설정: ${credentials.client_email} → ${impersonateUser}`);
+
     this.auth = new JWT(authConfig);
     this.drive = google.drive({ version: 'v3', auth: this.auth });
-    
-    console.log(`🔐 Drive 인증 설정 완료: ${credentials.client_email}`);
+
+    console.log(`✅ Drive 인증 설정 완료: ${credentials.client_email}`);
   }
 
   private resolveFolderId(input?: string): string {
     const envId = process.env.GOOGLE_DRIVE_FOLDER_ID;
     const candidate = input || envId;
-    
+
     if (!candidate) {
       throw new Error('GOOGLE_DRIVE_FOLDER_ID 환경변수가 설정되지 않았습니다');
     }
-    
+
     console.log(`🔍 폴더 ID 해석 중: ${candidate}`);
-    
+
     const foldersMatch = candidate.match(/\/folders\/([a-zA-Z0-9_-]+)/);
     if (foldersMatch?.[1]) {
       console.log(`✅ URL에서 폴더 ID 추출: ${foldersMatch[1]}`);
       return foldersMatch[1];
     }
-    
+
     console.log(`✅ 폴더 ID 사용: ${candidate}`);
     return candidate;
   }
-  
+
   private getWeeklyFolderName(): string {
     const now = new Date();
     const monday = new Date(now);
     monday.setDate(now.getDate() - now.getDay() + 1);
     const sunday = new Date(monday);
     sunday.setDate(monday.getDate() + 6);
-    
+
     const formatDate = (date: Date) => date.toISOString().split('T')[0];
     return `${formatDate(monday)}_to_${formatDate(sunday)}`;
   }
-  
+
   private async getOrCreateWeeklyFolder(): Promise<string> {
     const parentFolderId = this.resolveFolderId();
     const weeklyFolderName = this.getWeeklyFolderName();
-    
+
     console.log(`📁 주간 폴더 확인: ${weeklyFolderName} in ${parentFolderId}`);
-    
+
     try {
       const searchResponse = await this.drive.files.list({
         q: `name='${weeklyFolderName}' and parents in '${parentFolderId}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
@@ -139,13 +143,13 @@ export class GoogleDriveUploader {
         supportsAllDrives: true,
         includeItemsFromAllDrives: true
       });
-      
+
       if (searchResponse.data.files && searchResponse.data.files.length > 0) {
         const folderId = searchResponse.data.files[0].id;
         console.log(`📁 기존 주간 폴더 사용: ${weeklyFolderName} (${folderId})`);
         return folderId;
       }
-      
+
       const createResponse = await this.drive.files.create({
         requestBody: {
           name: weeklyFolderName,
@@ -155,29 +159,36 @@ export class GoogleDriveUploader {
         fields: 'id, name',
         supportsAllDrives: true
       });
-      
+
       const folderId = createResponse.data.id;
       console.log(`📁 새 주간 폴더 생성: ${weeklyFolderName} (${folderId})`);
       return folderId;
-      
+
     } catch (error: any) {
       console.error('❌ 주간 폴더 처리 실패:', error.message);
+      
+      if (error.message?.includes('File not found') || error.code === 404) {
+        console.error('💡 문제 해결 방법:');
+        console.error('   1. GOOGLE_WORKSPACE_ADMIN_EMAIL 계정이 폴더 접근 권한이 있는지 확인');
+        console.error('   2. 폴더 ID가 올바른지 확인');
+      }
+      
       console.log(`🔄 폴백: 상위 폴더 직접 사용 - ${parentFolderId}`);
       return parentFolderId;
     }
   }
-  
+
   async uploadAnalysisResult(analysisResult: AnalysisResult): Promise<DriveUploadResult> {
     try {
       console.log(`🚀 Google Drive 업로드 시작: ${analysisResult.title}`);
-      
+
       const weeklyFolderId = await this.getOrCreateWeeklyFolder();
-      
+
       const now = new Date();
       const timestamp = now.toISOString().replace(/[:.]/g, '-').slice(0, -5);
       const safeTitle = analysisResult.title.replace(/[\\/:*?"<>|]/g, '_').slice(0, 50);
       const fileName = `youtube_analysis_${safeTitle}_${timestamp}.xlsx`;
-      
+
       const workbook = new ExcelJS.Workbook();
       const worksheet = workbook.addWorksheet('AI Ad Analysis');
 
@@ -271,10 +282,18 @@ export class GoogleDriveUploader {
 
     } catch (error: any) {
       console.error('❌ Drive 업로드 실패:', error);
+      
+      let errorDetails = error.message;
+      if (error.code === 403) {
+        errorDetails += ' | 권한 부족: Domain-Wide Delegation 설정 확인 필요';
+      } else if (error.code === 404) {
+        errorDetails += ' | 폴더를 찾을 수 없음: GOOGLE_WORKSPACE_ADMIN_EMAIL 계정의 폴더 접근 권한 확인';
+      }
+      
       return {
         success: false,
-        error: error.message,
-        message: `업로드 실패: ${error.message}`
+        error: errorDetails,
+        message: `업로드 실패: ${errorDetails}`
       };
     }
   }
@@ -282,31 +301,38 @@ export class GoogleDriveUploader {
   async testConnection(): Promise<{ success: boolean; message: string }> {
     try {
       await this.auth.authorize();
-      
+
       const folderId = this.resolveFolderId();
       const response = await this.drive.files.get({
         fileId: folderId,
         fields: 'id, name, mimeType',
         supportsAllDrives: true
       });
-      
+
       console.log(`✅ 폴더 접근 성공: ${response.data.name}`);
-      
+
       return {
         success: true,
         message: `폴더 접근 성공: ${response.data.name} (${folderId})`
       };
-      
+
     } catch (error: any) {
       console.error('❌ 드라이브 연결 테스트 실패:', error.message);
-      
+
+      let troubleshooting = '';
+      if (error.code === 403) {
+        troubleshooting = ' | Domain-Wide Delegation 설정 필요';
+      } else if (error.code === 404) {
+        troubleshooting = ' | GOOGLE_WORKSPACE_ADMIN_EMAIL 계정의 폴더 접근 권한 확인';
+      }
+
       return {
         success: false,
-        message: `연결 실패: ${error.message}`
+        message: `연결 실패: ${error.message}${troubleshooting}`
       };
     }
   }
-  
+
   async cleanupOldFolders(): Promise<void> {
     try {
       const parentFolderId = this.resolveFolderId();
@@ -320,17 +346,17 @@ export class GoogleDriveUploader {
         supportsAllDrives: true,
         includeItemsFromAllDrives: true
       });
-      
+
       if (response.data.files && response.data.files.length > 0) {
         for (const folder of response.data.files) {
-          await this.drive.files.delete({ 
+          await this.drive.files.delete({
             fileId: folder.id,
             supportsAllDrives: true
           });
           console.log(`🗑️ 오래된 폴더 삭제: ${folder.name}`);
         }
       }
-      
+
     } catch (error) {
       console.error('❌ 폴더 정리 실패:', error);
     }
@@ -339,10 +365,10 @@ export class GoogleDriveUploader {
   async uploadDatabaseCSV(): Promise<DriveUploadResult> {
     try {
       console.log('📊 DB에서 CSV 데이터 생성 중...');
-      
+
       const db = getGlobalDB();
       const csvContent = db.exportToCSV();
-      
+
       if (!csvContent || csvContent.length < 100) {
         return {
           success: false,
@@ -352,10 +378,10 @@ export class GoogleDriveUploader {
       }
 
       const weeklyFolderId = await this.getOrCreateWeeklyFolder();
-      
+
       const timestamp = new Date().toISOString().split('T')[0];
       const fileName = `youtube_analysis_database_${timestamp}.csv`;
-      
+
       console.log(`📤 CSV 파일 업로드 시작: ${fileName}`);
 
       const searchResponse = await this.drive.files.list({
@@ -372,7 +398,7 @@ export class GoogleDriveUploader {
       if (searchResponse.data.files && searchResponse.data.files.length > 0) {
         fileId = searchResponse.data.files[0].id!;
         console.log(`🔄 기존 CSV 파일 업데이트: ${fileName}`);
-        
+
         await this.drive.files.update({
           fileId: fileId,
           media: {
@@ -383,7 +409,7 @@ export class GoogleDriveUploader {
         });
       } else {
         console.log(`📄 새 CSV 파일 생성: ${fileName}`);
-        
+
         const uploadResponse = await this.drive.files.create({
           requestBody: {
             name: fileName,
@@ -397,7 +423,7 @@ export class GoogleDriveUploader {
           fields: 'id, name, webViewLink',
           supportsAllDrives: true
         });
-        
+
         fileId = uploadResponse.data.id!;
       }
 
@@ -411,9 +437,9 @@ export class GoogleDriveUploader {
       });
 
       const fileUrl = `https://drive.google.com/file/d/${fileId}/view`;
-      
+
       console.log(`✅ DB CSV 업로드 완료: ${fileUrl}`);
-      
+
       return {
         success: true,
         fileId,
@@ -424,10 +450,18 @@ export class GoogleDriveUploader {
 
     } catch (error: any) {
       console.error('❌ DB CSV 업로드 실패:', error);
+      
+      let errorDetails = error.message;
+      if (error.code === 403) {
+        errorDetails += ' | 권한 부족: Domain-Wide Delegation 설정 확인';
+      } else if (error.code === 404) {
+        errorDetails += ' | 폴더 없음: GOOGLE_WORKSPACE_ADMIN_EMAIL 폴더 접근 권한 확인';
+      }
+      
       return {
         success: false,
-        error: error.message,
-        message: `DB CSV 업로드 실패: ${error.message}`
+        error: errorDetails,
+        message: `DB CSV 업로드 실패: ${errorDetails}`
       };
     }
   }
@@ -436,11 +470,11 @@ export class GoogleDriveUploader {
 export class AutoDriveUploader {
   private uploader: GoogleDriveUploader;
   private intervalId: NodeJS.Timeout | null = null;
-  
+
   constructor() {
     this.uploader = new GoogleDriveUploader();
   }
-  
+
   async uploadImmediately(analysisResult: any): Promise<any> {
     console.log(`🚀 즉시 업로드 요청: ${analysisResult.title}`);
     return await this.uploader.uploadAnalysisResult(analysisResult);
@@ -450,14 +484,14 @@ export class AutoDriveUploader {
     console.log('🚀 DB CSV 즉시 업로드 요청');
     return await this.uploader.uploadDatabaseCSV();
   }
-  
+
   startAutoUpload(intervalMinutes: number = 120) {
     console.log(`🔄 자동 업로드 스케줄 시작 (${intervalMinutes}분마다)`);
-    
+
     if (this.intervalId) {
       clearInterval(this.intervalId);
     }
-    
+
     this.intervalId = setInterval(async () => {
       try {
         console.log('⏰ 스케줄된 자동 업로드 실행');
@@ -472,7 +506,7 @@ export class AutoDriveUploader {
       }
     }, intervalMinutes * 60 * 1000);
   }
-  
+
   stopAutoUpload() {
     if (this.intervalId) {
       clearInterval(this.intervalId);
@@ -480,30 +514,30 @@ export class AutoDriveUploader {
       console.log('⏹️ 자동 업로드 스케줄 중지');
     }
   }
-  
+
   startAutoCleanup() {
     console.log('🔄 자동 정리 스케줄 시작 (매일 새벽 3시)');
-    
+
     const scheduleCleanup = () => {
       const now = new Date();
       const targetTime = new Date();
       targetTime.setHours(3, 0, 0, 0);
-      
+
       if (now > targetTime) {
         targetTime.setDate(targetTime.getDate() + 1);
       }
-      
+
       const timeUntilCleanup = targetTime.getTime() - now.getTime();
-      
+
       setTimeout(async () => {
         await this.uploader.cleanupOldFolders();
         scheduleCleanup();
       }, timeUntilCleanup);
     };
-    
+
     scheduleCleanup();
   }
-  
+
   stopAutoCleanup() {
     if (this.intervalId) {
       clearTimeout(this.intervalId);
