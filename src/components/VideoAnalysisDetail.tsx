@@ -3,7 +3,6 @@
 import React, { useState } from 'react';
 import { Save, Edit3, ExternalLink, BarChart3, FileText } from 'lucide-react';
 import { useVideoStore } from '@/store/videoStore';
-import { VIDEO_FEATURES } from '@/types/video';
 import { calculateHybridScore } from '@/services/metricsService';
 import toast from 'react-hot-toast';
 
@@ -26,8 +25,8 @@ const VideoAnalysisDetail: React.FC = () => {
     );
   }
 
-  const hybridScore = selectedVideo.status === 'completed' 
-    ? calculateHybridScore(selectedVideo) 
+  const hybridScore = selectedVideo.status === 'completed'
+    ? calculateHybridScore(selectedVideo)
     : null;
 
   const handleFeatureEdit = (featureKey: string, value: string) => {
@@ -53,6 +52,21 @@ const VideoAnalysisDetail: React.FC = () => {
     setEditMode(false);
   };
 
+  // features 객체에서 키 추출 및 정렬
+  const getFeatureEntries = () => {
+    if (!selectedVideo.features) return [];
+    
+    return Object.entries(selectedVideo.features)
+      .filter(([key]) => key.startsWith('feature_'))
+      .sort((a, b) => {
+        const numA = parseInt(a[0].replace('feature_', ''));
+        const numB = parseInt(b[0].replace('feature_', ''));
+        return numA - numB;
+      });
+  };
+
+  const featureEntries = getFeatureEntries();
+
   return (
     <div className="space-y-6">
       {/* 영상 정보 헤더 */}
@@ -63,7 +77,7 @@ const VideoAnalysisDetail: React.FC = () => {
               {selectedVideo.title}
             </h2>
             <div className="flex items-center gap-4 text-sm text-gray-600">
-              <a
+              
                 href={selectedVideo.url}
                 target="_blank"
                 rel="noopener noreferrer"
@@ -77,7 +91,7 @@ const VideoAnalysisDetail: React.FC = () => {
               )}
             </div>
           </div>
-          
+
           <div className="flex gap-2">
             {editMode ? (
               <>
@@ -137,7 +151,7 @@ const VideoAnalysisDetail: React.FC = () => {
             <BarChart3 className="w-6 h-6 text-blue-600" />
             종합 점수
           </h3>
-          
+
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             {/* 최종 하이브리드 점수 */}
             <div className="text-center p-4 bg-gradient-to-br from-blue-50 to-purple-50 rounded-lg">
@@ -206,58 +220,41 @@ const VideoAnalysisDetail: React.FC = () => {
       {/* 156가지 Feature 분석 결과 */}
       <div className="bg-white rounded-lg shadow-lg p-6">
         <h3 className="text-xl font-semibold text-gray-900 mb-6">
-          상세 분석 결과 (156개 항목)
+          상세 분석 결과 ({featureEntries.length}개 항목)
         </h3>
-        
-        {/* 카테고리별 그룹화 */}
-        {Object.entries(
-          VIDEO_FEATURES.reduce((acc, feature) => {
-            if (!acc[feature.category]) {
-              acc[feature.category] = [];
-            }
-            acc[feature.category].push(feature);
-            return acc;
-          }, {} as Record<string, typeof VIDEO_FEATURES>)
-        ).map(([category, features]) => (
-          <div key={category} className="mb-8">
-            <h4 className="text-lg font-semibold text-gray-800 mb-4 pb-2 border-b">
-              {category} ({features.length}개 항목)
-            </h4>
-            
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {features.map(feature => {
-                const featureKey = `feature_${feature.no}`;
-                const currentValue = editedFeatures[featureKey] !== undefined 
-                  ? editedFeatures[featureKey] 
-                  : selectedVideo.features[featureKey];
-                
-                return (
-                  <div key={feature.no} className="p-3 border rounded-lg">
-                    <div className="flex justify-between items-start mb-2">
-                      <label className="text-sm font-medium text-gray-700 flex-grow">
-                        {feature.no}. {feature.item}
-                      </label>
-                    </div>
-                    
-                    {editMode ? (
-                      <input
-                        type="text"
-                        value={currentValue || ''}
-                        onChange={(e) => handleFeatureEdit(featureKey, e.target.value)}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                        placeholder="값을 입력하세요"
-                      />
-                    ) : (
-                      <p className="text-gray-900 bg-gray-50 px-3 py-2 rounded-md min-h-[2.5rem] flex items-center">
-                        {currentValue || 'N/A'}
-                      </p>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        ))}
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {featureEntries.map(([featureKey, featureValue]) => {
+            const featureNo = featureKey.replace('feature_', '');
+            const currentValue = editedFeatures[featureKey] !== undefined
+              ? editedFeatures[featureKey]
+              : featureValue;
+
+            return (
+              <div key={featureKey} className="p-3 border rounded-lg">
+                <div className="flex justify-between items-start mb-2">
+                  <label className="text-sm font-medium text-gray-700 flex-grow">
+                    Feature {featureNo}
+                  </label>
+                </div>
+
+                {editMode ? (
+                  <input
+                    type="text"
+                    value={currentValue || ''}
+                    onChange={(e) => handleFeatureEdit(featureKey, e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    placeholder="값을 입력하세요"
+                  />
+                ) : (
+                  <p className="text-gray-900 bg-gray-50 px-3 py-2 rounded-md min-h-[2.5rem] flex items-center">
+                    {currentValue || 'N/A'}
+                  </p>
+                )}
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
