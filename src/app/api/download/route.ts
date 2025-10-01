@@ -1,4 +1,4 @@
-// src/app/api/download/route.ts - 완전 수정 (오류 해결)
+// src/app/api/download/route.ts - 완전 수정
 import { NextRequest, NextResponse } from 'next/server';
 import ExcelJS from 'exceljs';
 
@@ -169,173 +169,97 @@ type AnalysisItem = {
   url: string;
   notes?: string;
   scriptLanguage?: string;
-  completionStats?: {
-    completed: number;
-    incomplete: number;
-    total: number;
-  };
-  analysis?: {
-    [category: string]: {
-      [item: string]: any;
-    };
-  };
+  completionStats?: { completed: number; incomplete: number; total: number; percentage: number };
+  analysis: { [category: string]: { [feature: string]: string } };
 };
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
-    
-    // 단일 영상과 다중 영상 모두 지원
+    const body = await req.json().catch(() => ({}));
+
+    // 단일 영상 또는 다중 영상 지원
     let videos: AnalysisItem[] = [];
-    
+
     if (body.video && body.video.analysis) {
       // 단일 영상 케이스
       videos = [body.video];
     } else if (body.videos && Array.isArray(body.videos)) {
       // 다중 영상 케이스
-      videos = body.videos.filter((video: AnalysisItem) => video && video.analysis);
-    } else {
-      return NextResponse.json({ 
-        message: '분석 데이터가 없습니다.' 
-      }, { status: 400 });
+      videos = body.videos.filter((v: any) => v && v.analysis);
+    } else if (body.items && Array.isArray(body.items)) {
+      // items 형태 케이스
+      videos = body.items.filter((v: any) => v && v.analysis);
     }
 
-    if (videos.length === 0) {
-      return NextResponse.json({ 
-        message: '다운로드할 분석 결과가 없습니다.' 
-      }, { status: 400 });
+    if (!videos.length) {
+      return NextResponse.json({ message: '분석 데이터가 없습니다.' }, { status: 400 });
     }
 
-    console.log(`📊 엑셀 다운로드 생성 시작: ${videos.length}개 영상`);
+    console.log(`📊 엑셀 생성 시작: ${videos.length}개 영상, 156개 특성`);
 
-    // 엑셀 워크북 생성
     const workbook = new ExcelJS.Workbook();
-    
-    // 워크북 메타데이터
-    workbook.creator = 'AI 광고 분석 시스템';
-    workbook.lastModifiedBy = 'AI 광고 분석 시스템';
-    workbook.created = new Date();
-    workbook.modified = new Date();
+    const worksheet = workbook.addWorksheet('AI 광고 분석 결과');
 
-    // 요약 워크시트 생성
-    const summarySheet = workbook.addWorksheet('분석 요약');
-    
-    // 요약 헤더
-    summarySheet.addRow(['영상 제목', 'URL', '메모', '완료된 분석', '전체 분석', '완료율(%)']);
-    summarySheet.getRow(1).font = { bold: true };
-    summarySheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE6E6FA' } };
+    // 헤더 생성 (기본 정보 + 156개 특성)
+    const headers = [
+      'No',
+      '영상 제목',
+      'URL',
+      '비고',
+      '스크립트 언어',
+      '완성도(%)',
+      ...COMPLETE_FEATURES.map(f => `${f.no}.${f.category}_${f.item}`)
+    ];
 
-    // 요약 데이터 추가
+    worksheet.addRow(headers);
+
+    // 헤더 스타일 적용
+    const headerRow = worksheet.getRow(1);
+    headerRow.font = { bold: true };
+    headerRow.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFE0E0E0' }
+    };
+
+    // 데이터 행 추가
     videos.forEach((video, index) => {
-      const stats = video.completionStats || { completed: 0, total: 156, incomplete: 156 };
-      const completionRate = stats.total > 0 ? ((stats.completed / stats.total) * 100).toFixed(1) : '0.0';
-      
-      summarySheet.addRow([
-        video.title || `영상 ${index + 1}`,
-        video.url || '',
+      const row = [
+        index + 1,
+        video.title || 'N/A',
+        video.url || 'N/A',
         video.notes || '',
-        stats.completed,
-        stats.total,
-        `${completionRate}%`
-      ]);
-    });
+        video.scriptLanguage || 'N/A',
+        video.completionStats?.percentage || 0
+      ];
 
-    // 요약 시트 컬럼 자동 크기 조정
-    summarySheet.columns.forEach(column => {
-      if (column.header === 'URL') {
-        column.width = 50;
-      } else if (column.header === '영상 제목') {
-        column.width = 30;
-      } else {
-        column.width = 15;
-      }
-    });
-
-    // 각 영상별 상세 분석 워크시트 생성
-    videos.forEach((video, videoIndex) => {
-      const sanitizedTitle = (video.title || `영상${videoIndex + 1}`)
-        .replace(/[\\/:*?"<>|]/g, '_')
-        .substring(0, 30); // 시트명 길이 제한
-      
-      const worksheet = workbook.addWorksheet(`${videoIndex + 1}. ${sanitizedTitle}`);
-      
-      // 영상 정보 헤더
-      worksheet.addRow(['영상 정보']);
-      worksheet.getRow(worksheet.rowCount).font = { bold: true, size: 14 };
-      worksheet.getRow(worksheet.rowCount).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFB6D7A8' } };
-      
-      worksheet.addRow(['항목', '내용']);
-      worksheet.getRow(worksheet.rowCount).font = { bold: true };
-      worksheet.getRow(worksheet.rowCount).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9EAD3' } };
-      
-      worksheet.addRow(['제목', video.title || '']);
-      worksheet.addRow(['URL', video.url || '']);
-      worksheet.addRow(['메모', video.notes || '']);
-      worksheet.addRow(['스크립트 언어', video.scriptLanguage || '한국어']);
-      
-      const stats = video.completionStats || { completed: 0, total: 156, incomplete: 156 };
-      const completionRate = stats.total > 0 ? ((stats.completed / stats.total) * 100).toFixed(1) : '0.0';
-      worksheet.addRow(['완료된 분석', `${stats.completed}/${stats.total} (${completionRate}%)`]);
-      
-      // 빈 행 추가
-      worksheet.addRow([]);
-      
-      // 156개 특성 분석 결과 헤더
-      worksheet.addRow(['156개 특성 분석 결과']);
-      worksheet.getRow(worksheet.rowCount).font = { bold: true, size: 14 };
-      worksheet.getRow(worksheet.rowCount).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFB6D7A8' } };
-      
-      worksheet.addRow(['번호', '카테고리', '분석 항목', '분석 결과']);
-      worksheet.getRow(worksheet.rowCount).font = { bold: true };
-      worksheet.getRow(worksheet.rowCount).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9EAD3' } };
-      
       // 156개 특성 데이터 추가
       COMPLETE_FEATURES.forEach(feature => {
-        const categoryData = video.analysis?.[feature.category] || {};
-        const value = categoryData[feature.item] || '';
-        
-        // 값이 객체인 경우 문자열로 변환
-        let displayValue = '';
-        if (typeof value === 'object' && value !== null) {
-          displayValue = JSON.stringify(value);
-        } else {
-          displayValue = String(value || '');
+        let value = 'N/A';
+
+        // analysis 구조에서 값 찾기
+        if (video.analysis && video.analysis[feature.category]) {
+          value = video.analysis[feature.category][feature.item] || 'N/A';
         }
-        
-        worksheet.addRow([
-          feature.no,
-          feature.category,
-          feature.item,
-          displayValue
-        ]);
+
+        row.push(value);
       });
-      
-      // 컬럼 크기 조정
-      worksheet.getColumn(1).width = 8;   // 번호
-      worksheet.getColumn(2).width = 20;  // 카테고리
-      worksheet.getColumn(3).width = 25;  // 분석 항목
-      worksheet.getColumn(4).width = 40;  // 분석 결과
-      
-      // 테두리 추가
-      const dataStartRow = worksheet.rowCount - COMPLETE_FEATURES.length + 1;
-      const dataEndRow = worksheet.rowCount;
-      
-      for (let rowNum = dataStartRow; rowNum <= dataEndRow; rowNum++) {
-        for (let colNum = 1; colNum <= 4; colNum++) {
-          const cell = worksheet.getCell(rowNum, colNum);
-          cell.border = {
-            top: { style: 'thin' },
-            left: { style: 'thin' },
-            bottom: { style: 'thin' },
-            right: { style: 'thin' }
-          };
-        }
-      }
+
+      worksheet.addRow(row);
     });
 
-    console.log(`✅ 엑셀 워크북 생성 완료: ${workbook.worksheets.length}개 시트`);
+    // 컬럼 너비 조정
+    worksheet.columns.forEach((column, index) => {
+      if (index === 0) column.width = 5;   // No
+      else if (index === 1) column.width = 40;  // 제목
+      else if (index === 2) column.width = 50;  // URL
+      else if (index <= 5) column.width = 15;   // 기타 정보
+      else column.width = 25;  // 특성 데이터
+    });
 
-    // 파일명 생성 (오류 수정: videos[0] 사용)
+    console.log(`✅ 엑셀 생성 완료: ${videos.length}개 영상, ${COMPLETE_FEATURES.length}개 특성`);
+
+    // 파일명 생성 (수정: video → videos[0])
     const timestamp = new Date().toISOString().split('T')[0];
     const fileName = videos.length === 1
       ? `${videos[0].title.replace(/[\\/:*?"<>|]/g, '_')}_분석결과_${timestamp}.xlsx`
@@ -353,8 +277,8 @@ export async function POST(req: NextRequest) {
 
   } catch (error: any) {
     console.error('❌ Excel 다운로드 오류:', error);
-    return NextResponse.json({ 
-      message: error?.message || '엑셀 파일 생성 중 오류가 발생했습니다.' 
+    return NextResponse.json({
+      message: error?.message || '엑셀 파일 생성 중 오류가 발생했습니다.'
     }, { status: 500 });
   }
 }
